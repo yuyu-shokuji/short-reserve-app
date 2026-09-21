@@ -8,7 +8,10 @@
 // 列はすべて見出し名で探す（列番号のべた書きはしない）。見出しが無ければ右端に作る。
 // 食事管理アプリの ショート_名 で「列10が非表示と衝突して人が消える」事故があったため。
 
-import { readSheets, writeSheetAoa, batchWrite, SHEET, type CellWrite, type CellClear } from './sheets';
+import {
+  readSheets, writeSheetAoa, batchWrite, ensureSheetExists, appendRow,
+  SHEET, type CellWrite, type CellClear,
+} from './sheets';
 
 const COLS = ['ID', '氏名', '棟', '部屋', '開始日', '終了日', '状態', '送迎', '入所時間', '退所時間', '備考', '登録日時'] as const;
 
@@ -338,6 +341,8 @@ export async function saveReservation(p: SaveParams): Promise<string> {
   if (isNewRow) put('登録日時', nowStamp());
 
   await batchWrite(writes, clears);
+  // 消したものを戻したときは、削除ログ側にも「取消」と印を付けて食い違いを残さない
+  if (p.restore) await markDeletionUndone(id);
   return id;
 }
 
@@ -355,8 +360,96 @@ export async function deleteReservation(id: string): Promise<Reservation> {
 
   const removed = parseRow(grid.rows[rowIdx], grid.col, rowIdx);
   if (!removed) throw new Error('この予約は見つかりませんでした');
+
+  // 先に削除ログへ退避してから消す。順番が逆だと、ログを書く前に落ちたときに中身が失われる。
+  await logDeletion(removed);
+
   const out = grid.rows.map(r => r.map((c: any) => (c === '' ? null : c)));
   out.splice(rowIdx, 1);
   await writeSheetAoa(SHEET.reserve, out);
   return removed;
+}
+
+// ── 削除ログ ─────────────────────────────────────────────────────────
+// 消した予約は「削除ログ」シートに1行ずつ積む。画面の「↩ 削除を取り消す」は
+// その場でしか使えないので、あとから気づいたときはこのシートから拾い直す。
+
+const TRASH_COLS = ['削除日時', '取消', 'ID', '氏名', '棟', '部屋', '開始日', '終了日',
+  '状態', '送迎', '入所時間', '退所時間', '備考', '登録日時'] as const;
+
+function trashRowOf(r: Reservation): any[] {
+  return [nowStamp(), '', r.id, r.name, r.building, r.room, r.start, r.end,
+    r.status, r.soutai, r.inTime, r.outTime, r.note, r.createdAt];
+}
+
+async function logDeletion(r: Reservation): Promise<void> {
+  await ensureSheetExists(SHEET.trash, [...TRASH_COLS]);
+  await appendRow(SHEET.trash, trashRowOf(r));
+}
+
+/**
+ * 削除ログの該当行に「取消」の印を付ける（削除を取り消したとき）。
+ * 同じIDが何度も消されている場合は、いちばん新しい未取消の行に付ける。
+ * ログが読めなくても復元自体は成功しているので、ここで失敗しても投げない。
+ */
+async function markDeletionUndone(id: string): Promise<void> {
+  try {
+    const rows = (await readSheets([SHEET.trash]))[SHEET.trash] ?? [];
+    if (rows.length < 2) return;
+    const head = (rows[0] ?? []).map((c: any) => String(c ?? '').trim());
+    const idCol = head.indexOf('ID');
+    let undoCol = head.indexOf('取消');
+    if (idCol < 0) return;
+    const writes: CellWrite[] = [];
+    if (undoCol < 0) {
+      undoCol = rows.reduce((m, r) => Math.max(m, r.length), head.length);
+      writes.push({ sheet: SHEET.trash, row: 0, col: undoCol, value: '取消' });
+    }
+    for (let i = rows.length - 1; i >= 1; i--) {
+      if (cell(rows[i], idCol) !== id) continue;
+      if (cell(rows[i], undoCol)) continue;      // すでに取消済みの行は飛ばす
+      writes.push({ sheet: SHEET.trash, row: i, col: undoCol, value: `取消 ${nowStamp()}` });
+      break;
+    }
+    if (writes.length) await batchWrite(writes);
+  } catch { /* ログの更新に失敗しても復元は済んでいるので黙って続ける */ }
+}
+
+/** 削除ログの一覧（新しい順）。取消済みも含めて返し、画面側で分ける。 */
+export interface TrashEntry {
+  deletedAt: string; undone: string;
+  id: string; name: string; building: string; room: number;
+  start: string; end: string; status: ReserveStatus; soutai: SoutaiKind;
+  inTime: string; outTime: string; note: string;
+}
+
+export async function listTrash(limit = 50): Promise<TrashEntry[]> {
+  let rows: any[][];
+  try {
+    rows = (await readSheets([SHEET.trash]))[SHEET.trash] ?? [];
+  } catch { return []; }          // シートがまだ無い＝1件も消していない
+  if (rows.length < 2) return [];
+  const head = (rows[0] ?? []).map((c: any) => String(c ?? '').trim());
+  const c = (k: string) => head.indexOf(k);
+  const out: TrashEntry[] = [];
+  for (let i = rows.length - 1; i >= 1 && out.length < limit; i--) {
+    const name = cell(rows[i], c('氏名'));
+    if (!name) continue;
+    out.push({
+      deletedAt: cell(rows[i], c('削除日時')),
+      undone: cell(rows[i], c('取消')),
+      id: cell(rows[i], c('ID')),
+      name,
+      building: cell(rows[i], c('棟')),
+      room: Number(cell(rows[i], c('部屋'))) || 0,
+      start: cell(rows[i], c('開始日')),
+      end: cell(rows[i], c('終了日')),
+      status: cell(rows[i], c('状態')) === '確定' ? '確定' : '仮予約',
+      soutai: parseSoutai(cell(rows[i], c('送迎'))),
+      inTime: cell(rows[i], c('入所時間')),
+      outTime: cell(rows[i], c('退所時間')),
+      note: cell(rows[i], c('備考')),
+    });
+  }
+  return out;
 }

@@ -18,6 +18,8 @@ export const SHEET = {
   reserve: '予約',
   people: '利用者',
   rooms: '部屋',
+  /** 消した予約の退避先。消しっぱなしにせず1行ずつ積む（あとから拾い直せるように）。 */
+  trash: '削除ログ',
 } as const;
 
 function assertConfigured(): string {
@@ -159,6 +161,40 @@ export async function batchWrite(writes: CellWrite[], clears: CellClear[] = []):
       requestBody: { ranges: clears.map(c => rangeStr(c.sheet, cellA1(c.row, c.col))) },
     }));
   }
+  invalidate();
+}
+
+/** シートが無ければ作ってヘッダー行を書く（削除ログのような後付けシート用）。 */
+export async function ensureSheetExists(sheetName: string, header: any[]): Promise<void> {
+  const sid = assertConfigured();
+  const sh = await getSheetsClient();
+  const meta = await withRetry(() => sh.spreadsheets.get({ spreadsheetId: sid, fields: 'sheets.properties.title' }));
+  const names = (meta.data.sheets ?? []).map((s: any) => s.properties?.title ?? '');
+  if (names.includes(sheetName)) return;
+  await withRetry(() => sh.spreadsheets.batchUpdate({
+    spreadsheetId: sid,
+    requestBody: { requests: [{ addSheet: { properties: { title: sheetName } } }] },
+  }));
+  if (header.length) {
+    await withRetry(() => sh.spreadsheets.values.update({
+      spreadsheetId: sid, range: `'${sheetName}'!A1`,
+      valueInputOption: 'RAW', requestBody: { values: [header] },
+    }));
+  }
+  invalidate();
+}
+
+/** シートの末尾に1行足す（読み取り不要。ログのように積むだけの用途に使う）。 */
+export async function appendRow(sheetName: string, row: any[]): Promise<void> {
+  const sid = assertConfigured();
+  const sh = await getSheetsClient();
+  await withRetry(() => sh.spreadsheets.values.append({
+    spreadsheetId: sid,
+    range: `'${sheetName}'!A:A`,
+    valueInputOption: 'RAW',
+    insertDataOption: 'INSERT_ROWS',
+    requestBody: { values: [row.map(c => c ?? '')] },
+  }));
   invalidate();
 }
 

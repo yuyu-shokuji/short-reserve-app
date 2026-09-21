@@ -108,6 +108,14 @@ interface DropPreview { building: string; room: number; start: string; end: stri
 /** 書こうとしたら重なりが見つかったときの確認（移動・削除の取り消しで共用） */
 interface AskState { title: string; conflicts: Conflict[]; confirmLabel: string; onConfirm: () => void; }
 
+/** 削除ログの1行 */
+interface TrashEntry {
+  deletedAt: string; undone: string;
+  id: string; name: string; building: string; room: number;
+  start: string; end: string; status: '仮予約' | '確定'; soutai: SoutaiKind;
+  inTime: string; outTime: string; note: string;
+}
+
 interface Props { year: number; month: number; people: Person[]; }
 
 export default function ReserveLedger({ year, month, people }: Props) {
@@ -131,6 +139,9 @@ export default function ReserveLedger({ year, month, people }: Props) {
   // 直前の1回だけ戻せるようにする（掴み間違い・消し間違いの取り消し）
   const [lastMove, setLastMove] = useState<{ id: string; name: string; building: string; room: number; start: string; end: string } | null>(null);
   const [lastDelete, setLastDelete] = useState<Reservation | null>(null);
+  // 削除ログ（消した予約の履歴）。開いたときだけ読む。
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [trash, setTrash] = useState<TrashEntry[] | null>(null);
 
   const load = useCallback(async (silent = false) => {
     if (!silent) { setLoading(true); setError(''); }
@@ -305,9 +316,19 @@ export default function ReserveLedger({ year, month, people }: Props) {
     } catch (e: any) { setMsg(`⚠ ${e.message}`); } finally { setBusy(false); }
   };
 
-  /** 削除の取り消し。消したときと同じIDで作り直すので、消す前と同じ行に戻る。 */
-  const restoreDeleted = async (force = false) => {
-    const rv = lastDelete;
+  const loadTrash = useCallback(async () => {
+    try {
+      const j = await (await fetch('/api/trash', { cache: 'no-store' })).json();
+      setTrash(j.entries ?? []);
+    } catch { setTrash([]); }
+  }, []);
+
+  /**
+   * 消した予約を戻す。消したときと同じIDで作り直すので、消す前と同じ1行に戻る。
+   * 引数なし＝直前の削除、entry あり＝削除ログから選んだもの。
+   */
+  const restoreDeleted = async (force = false, entry?: TrashEntry) => {
+    const rv: Reservation | TrashEntry | null = entry ?? lastDelete;
     if (!rv) return;
     setBusy(true); setMsg('');
     try {
@@ -321,12 +342,14 @@ export default function ReserveLedger({ year, month, people }: Props) {
         setAsk({
           title: `${rv.name} さん（${rv.building}${pad2(rv.room)}号 ${mdOf(rv.start)}〜${mdOf(rv.end)}）を戻すと重なります（まだ戻していません）`,
           conflicts: j.conflicts, confirmLabel: '重なったまま戻す',
-          onConfirm: () => restoreDeleted(true),
+          onConfirm: () => restoreDeleted(true, entry),
         });
         return;
       }
-      setAsk(null); setLastDelete(null);
+      setAsk(null);
+      if (!entry) setLastDelete(null);
       await load(true);
+      if (trashOpen) await loadTrash();
       setMsg(`↩ ${rv.name} さん（${rv.building}${pad2(rv.room)}号 ${mdOf(rv.start)}〜${mdOf(rv.end)}）の削除を取り消しました`);
     } catch (e: any) { setMsg(`⚠ ${e.message}`); } finally { setBusy(false); }
   };
@@ -458,10 +481,17 @@ export default function ReserveLedger({ year, month, people }: Props) {
         .rv-grab { cursor: grab; }
         .rv-grab:active { cursor: grabbing; }
         /* 入所時間（初日の名前の上）・退所時間（最終日の名前の下）。家族送迎は FA 付き。 */
-        .rv-time { font-size: 8px; line-height: 1.1; letter-spacing: -.04em; color: #334155; font-weight: 700; }
+        .rv-time { font-size: 8px; line-height: 1.1; letter-spacing: -.04em; color: #475569; font-weight: 400; }
         /* 氏名は苗字と名前で2段。1段あたりが短くなるぶん文字を大きくできる。
            書体はメイリオ指定（現場の見やすさ優先。無い環境では既定のゴシックに落ちる）。 */
-        .rv-name { line-height: 1.12; font-family: "Meiryo", "メイリオ", "Meiryo UI", sans-serif; }
+        /* 書体は明朝。太字にしないほうが字面が静かで読みやすい（現場の指定）。 */
+        .rv-name {
+          line-height: 1.12; font-weight: 400;
+          font-family: "Yu Mincho", "YuMincho", "Hiragino Mincho ProN", "MS PMincho", "MS Mincho", serif;
+        }
+        /* 行の高さを全部そろえる。いちばん背の高い「入所時間＋氏名2段＋退所時間」に合わせる
+           ＝日によって行がガタつかず、横に目で追える。はみ出しは td の overflow:hidden で切る。 */
+        .rv-table tbody tr.rv-roomrow td, .rv-table tbody tr.rv-roomrow th { height: 56px; }
       `}</style>
 
       <div className="rv-noprint flex items-center gap-3 flex-wrap">
@@ -491,9 +521,56 @@ export default function ReserveLedger({ year, month, people }: Props) {
         )}
         <button onClick={() => openNew(rooms[0]?.building ?? 'さくら', rooms[0]?.room ?? 1, isoOf(year, month, 1))}
           className="ml-auto bg-emerald-500 text-white rounded-lg px-4 py-2 text-sm font-semibold hover:bg-emerald-600">＋ 予約を追加</button>
+        <button onClick={() => { const open = !trashOpen; setTrashOpen(open); if (open) loadTrash(); }}
+          className={`rounded-lg px-3 py-2 text-sm font-semibold ${trashOpen ? 'bg-slate-600 text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}>
+          🗑 削除の履歴
+        </button>
         <button onClick={() => window.print()} className="bg-sky-500 text-white rounded-lg px-3 py-2 text-sm font-semibold">🖨 印刷（A3横）</button>
         <button onClick={() => load()} className="bg-gray-200 text-gray-700 rounded-lg px-3 py-2 text-sm font-semibold">🔄 更新</button>
       </div>
+
+      {/* 削除の履歴。消した予約は消さずに「削除ログ」シートへ積んであるので、あとからでも戻せる。 */}
+      {trashOpen && (
+        <div className="rv-noprint rounded-xl border border-slate-300 bg-white overflow-hidden">
+          <div className="px-3 py-2 font-bold text-sm bg-slate-100 border-b border-slate-200 flex items-center gap-2">
+            🗑 削除の履歴（新しい順）
+            <span className="font-normal text-xs text-slate-500">消した予約は「削除ログ」シートに残っています。月をまたいだぶんも出ます。</span>
+            <button onClick={loadTrash} className="ml-auto text-xs text-sky-600 underline">再読込</button>
+          </div>
+          {trash === null ? <div className="px-3 py-4 text-sm text-gray-400 animate-pulse">読み込み中...</div>
+            : trash.length === 0 ? <div className="px-3 py-4 text-sm text-gray-400">まだ1件も削除していません。</div>
+            : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-gray-500 bg-gray-50">
+                    <th className="px-3 py-1.5">削除日時</th><th className="px-2 py-1.5">氏名</th>
+                    <th className="px-2 py-1.5">部屋</th><th className="px-2 py-1.5">期間</th>
+                    <th className="px-2 py-1.5">状態</th><th className="px-2 py-1.5">備考</th>
+                    <th className="px-2 py-1.5"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {trash.map((t, i) => (
+                    <tr key={`${t.id}-${i}`} className={`border-t border-gray-100 ${t.undone ? 'text-gray-400' : ''}`}>
+                      <td className="px-3 py-1.5 tabular-nums text-xs">{t.deletedAt}</td>
+                      <td className="px-2 py-1.5 font-medium">{t.name}</td>
+                      <td className="px-2 py-1.5">{t.building}{pad2(t.room)}</td>
+                      <td className="px-2 py-1.5 tabular-nums text-xs">{t.start} 〜 {t.end}</td>
+                      <td className="px-2 py-1.5 text-xs">{t.status}</td>
+                      <td className="px-2 py-1.5 text-xs text-gray-500">{t.note}</td>
+                      <td className="px-2 py-1.5">
+                        {t.undone
+                          ? <span className="text-xs text-gray-400">戻しました</span>
+                          : <button disabled={busy} onClick={() => restoreDeleted(false, t)}
+                              className="px-2 py-1 rounded bg-emerald-500 text-white text-xs font-bold hover:bg-emerald-600 disabled:opacity-40">戻す</button>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+        </div>
+      )}
 
       <div className="print:block hidden text-base font-bold mb-1">ショート予約台帳　{year}年{month}月</div>
 
@@ -717,7 +794,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
                     // 利用者数の行を挟む棟では、棟の区切り線はそちらに付ける
                     const isLastRoom = ri === b.rooms.length - 1;
                     return (
-                      <tr key={`${b.name}-${rm.room}`} className={isLastRoom && b.staging ? 'rv-bldend' : ''}>
+                      <tr key={`${b.name}-${rm.room}`} className={`rv-roomrow ${isLastRoom && b.staging ? 'rv-bldend' : ''}`}>
                         {ri === 0 && (
                           <th rowSpan={b.rooms.length} style={{ left: 0 }}
                             className={`rv-fix px-1 py-1 text-[10px] font-bold ${
@@ -739,8 +816,8 @@ export default function ReserveLedger({ year, month, people }: Props) {
                             && iso >= preview.start && iso <= preview.end;
                           const base = !rv
                             ? (b.staging ? 'bg-slate-50 ' : '') + (dowBg(w) || '') + ' text-gray-300'
-                            : rv.status === '確定' ? 'bg-indigo-100 text-indigo-950 font-semibold'
-                            : 'bg-amber-50 text-amber-900 font-semibold rv-kari';
+                            : rv.status === '確定' ? 'bg-indigo-100 text-indigo-950'
+                            : 'bg-amber-50 text-amber-900 rv-kari';
                           // 塊の枠：月をまたぐぶんは端の縦線を出さない
                           const blkS = !!rv && iso === rv.start;
                           const blkE = !!rv && iso === rv.end;
@@ -877,8 +954,9 @@ export default function ReserveLedger({ year, month, people }: Props) {
         ※ <b>予約のマスはつまんで動かせます</b>（部屋替えと日付ずらしが同時にできます。塊ごと動き、泊数は変わりません）。
         動かす先が埋まっているときは確認してから動かします。入れ替えたいときは、先に片方を<b>「仮置き」</b>へ逃がしてください
         （仮置きは実在しない部屋なので、空き部屋数や空き検索には出ません）。
-        移動は「↩ 直前の移動を戻す」、削除は「↩ 削除を取り消す」で、それぞれ直前の1回を取り消せます
-        （消したときと同じ内容でそのまま戻ります。ただし画面を開き直すと取り消せなくなります）。
+        移動は「↩ 直前の移動を戻す」、削除は「↩ 削除を取り消す」で、それぞれ直前の1回を取り消せます。
+        <b>消した予約は「削除ログ」シートに残る</b>ので、あとから気づいたときも「🗑 削除の履歴」からいつでも戻せます
+        （消したときと同じ内容・同じ行で戻ります）。
         空きマスをクリックで追加、予約のマスをクリックで編集。期間を入れると、その期間を丸ごと押さえられる部屋が選択肢に「○」で出ます。
         入所時間は初日の名前の上、退所時間は最終日の名前の下に出ます。<b>家族送迎</b>のときは時間の前に <b>FA</b> が付きます
         （時間の入力は送迎の有無とは別で、送迎なしでも入れられます）。
