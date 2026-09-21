@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+html, body { margin: 0; padding: 0; }
+* { box-sizing: border-box; }
+
+body {
+  background: #f9fafb;
+  color: #171717;
+  font-family: system-ui, -apple-system, "Segoe UI", "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+}

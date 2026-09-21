@@ -1,0 +1,12 @@
+/node_modules
+/.next
+/out
+*.log
+.env
+.env.local
+.DS_Store
+next-env.d.ts
+# 秘密情報・本番データは絶対にコミットしない
+service-account-key.json
+*.xlsx
+*.xlsm
