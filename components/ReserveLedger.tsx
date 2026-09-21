@@ -65,6 +65,12 @@ function fontPxFor(s: string): number {
   return Math.max(7, Math.min(13, Math.floor(DAY_W / n)));
 }
 
+/** 入れ替わりの日は上下2段に詰めるので、氏名は1行。幅に収まるよう小さめにする。 */
+function swapFontPxFor(s: string): number {
+  const n = Math.max(1, String(s ?? '').replace(/[\s　]+/g, '').length);
+  return Math.max(5, Math.min(9, Math.floor((DAY_W - 2) / n)));
+}
+
 const todayISO = () => {
   const d = new Date();
   return isoOf(d.getFullYear(), d.getMonth() + 1, d.getDate());
@@ -81,6 +87,21 @@ function addDays(iso: string, n: number): string {
 /** 泊数（終了日 − 開始日） */
 const nightsOf = (start: string, end: string) =>
   Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86400000);
+
+/**
+ * 時刻を5分単位に丸める（"10:03" → "10:05"）。
+ * 入力欄は step=300 で5分刻みにしてあるが、手打ちやコピー貼り付けの端数もここで吸収する。
+ * 60分に繰り上がったら次の時へ。24時を越えたら 23:55 で止める。
+ */
+function snapTo5(t: string): string {
+  const m = /^(\d{1,2}):(\d{1,2})$/.exec(String(t ?? '').trim());
+  if (!m) return t;
+  let h = Number(m[1]);
+  let mi = Math.round(Number(m[2]) / 5) * 5;
+  if (mi >= 60) { mi = 0; h += 1; }
+  if (h >= 24) return '23:55';
+  return `${pad2(h)}:${pad2(mi)}`;
+}
 
 const mdOf = (iso: string) => {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
@@ -446,6 +467,26 @@ export default function ReserveLedger({ year, month, people }: Props) {
   const formNights = form ? nightsOf(form.start, form.end) : 0;
   const freeList = vacancy?.vacancies.filter(v => v.free) ?? [];
 
+  /**
+   * 下の一覧はあいうえお順（利用者シートのふりがな）。
+   * ふりがなが無い人は末尾にまわし、そのなかは氏名の読み順。
+   * 同じ人が複数回いる場合は期間の早い順。
+   */
+  const furiOf = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of people) m.set(p.name, p.furi);
+    return m;
+  }, [people]);
+
+  const listRows = useMemo(() => [...rows].sort((a, b) => {
+    const fa = furiOf.get(a.name) ?? '', fb = furiOf.get(b.name) ?? '';
+    if (!fa && fb) return 1;
+    if (fa && !fb) return -1;
+    return fa.localeCompare(fb, 'ja')
+      || a.name.localeCompare(b.name, 'ja')
+      || a.start.localeCompare(b.start);
+  }), [rows, furiOf]);
+
   return (
     <div className="rv-print space-y-4">
       <style>{`
@@ -492,6 +533,15 @@ export default function ReserveLedger({ year, month, people }: Props) {
         /* 行の高さを全部そろえる。いちばん背の高い「入所時間＋氏名2段＋退所時間」に合わせる
            ＝日によって行がガタつかず、横に目で追える。はみ出しは td の overflow:hidden で切る。 */
         .rv-table tbody tr.rv-roomrow td, .rv-table tbody tr.rv-roomrow th { height: 56px; }
+        /* 入れ替わりの日：1マスを上下に割って、上＝出る人・下＝入る人。
+           10:00に退所して11:00に次の人が入る、という使い方がふつうにあるため。 */
+        .rv-swap { display: flex; flex-direction: column; height: 100%; gap: 1px; }
+        .rv-swap-half {
+          flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+          line-height: 1.05; overflow: hidden;
+        }
+        .rv-swap-time { font-size: 7px; color: #475569; letter-spacing: -.04em; }
+        .rv-swap-name { display: block; white-space: nowrap; }
       `}</style>
 
       <div className="rv-noprint flex items-center gap-3 flex-wrap">
@@ -701,14 +751,17 @@ export default function ReserveLedger({ year, month, people }: Props) {
 
           {/* 入退所の時間と送迎区分は別もの。送迎なしでも時間は入れられる。 */}
           <div className="flex items-end gap-3 flex-wrap">
+            {/* 時間は5分刻み（step=300）。手で打った端数は5分単位に丸める。 */}
             <label className="text-xs text-gray-600 space-y-1">
               <span className="font-semibold block">入所時間（初日）</span>
-              <input type="time" value={form.inTime} onChange={e => patch({ inTime: e.target.value })}
+              <input type="time" step={300} value={form.inTime}
+                onChange={e => patch({ inTime: snapTo5(e.target.value) })}
                 className="border border-gray-200 rounded-md px-2 py-1.5 text-sm" />
             </label>
             <label className="text-xs text-gray-600 space-y-1">
               <span className="font-semibold block">退所時間（最終日）</span>
-              <input type="time" value={form.outTime} onChange={e => patch({ outTime: e.target.value })}
+              <input type="time" step={300} value={form.outTime}
+                onChange={e => patch({ outTime: snapTo5(e.target.value) })}
                 className="border border-gray-200 rounded-md px-2 py-1.5 text-sm" />
             </label>
             <label className="text-xs text-gray-600 space-y-1">
@@ -809,18 +862,25 @@ export default function ReserveLedger({ year, month, people }: Props) {
                           const rv = list[0];
                           const iso = isoOf(year, month, i + 1);
                           const w = dowOf(year, month, i + 1);
-                          const dupRoom = list.length > 1;
+                          // 同日交代：この日に退所する人と入所する人が1人ずつ＝ふつうの入れ替わり。
+                          // 二重予約（赤）ではなく、マスを上下に分けて両方出す。
+                          const leaving = list.length === 2 ? list.find(x => x.end === iso) : undefined;
+                          const arriving = list.length === 2 ? list.find(x => x.start === iso) : undefined;
+                          const handover = !!leaving && !!arriving && leaving.id !== arriving.id;
+                          const dupRoom = list.length > 1 && !handover;
                           const dupPerson = !!rv && doubleBooked.has(`${rv.name}|${iso}`);
                           const isSource = !!rv && !!drag && drag.rv.id === rv.id;
                           const inPreview = !!preview && preview.building === b.name && preview.room === rm.room
                             && iso >= preview.start && iso <= preview.end;
+                          const toneOf = (x: Reservation) => x.status === '確定'
+                            ? 'bg-indigo-100 text-indigo-950' : 'bg-amber-50 text-amber-900 rv-kari';
                           const base = !rv
                             ? (b.staging ? 'bg-slate-50 ' : '') + (dowBg(w) || '') + ' text-gray-300'
-                            : rv.status === '確定' ? 'bg-indigo-100 text-indigo-950'
-                            : 'bg-amber-50 text-amber-900 rv-kari';
-                          // 塊の枠：月をまたぐぶんは端の縦線を出さない
-                          const blkS = !!rv && iso === rv.start;
-                          const blkE = !!rv && iso === rv.end;
+                            : handover ? 'bg-white text-gray-900' : toneOf(rv);
+                          // 塊の枠：月をまたぐぶんは端の縦線を出さない。
+                          // 交代日は両方の塊の端なので、左右とも枠を引く。
+                          const blkS = !!rv && (handover || iso === rv.start);
+                          const blkE = !!rv && (handover || iso === rv.end);
                           const blk = !rv ? ''
                             : blkS && blkE ? 'rv-blk-se ' : blkS ? 'rv-blk-s ' : blkE ? 'rv-blk-e ' : 'rv-blk ';
                           const warn = dupRoom ? 'outline outline-2 outline-red-500 '
@@ -830,15 +890,18 @@ export default function ReserveLedger({ year, month, people }: Props) {
                           // 家族送迎は時間の前に FA。単日の予約は1マスに上下とも出る。
                           const showIn = !!rv && iso === rv.start && !!rv.inTime;
                           const showOut = !!rv && iso === rv.end && !!rv.outTime;
-                          const title = rv
-                            ? `${rv.name}（${rv.status}）${rv.building}${pad2(rv.room)}号 ${rv.start}〜${rv.end}`
-                              + (rv.inTime ? ` / 入所 ${rv.inTime}` : '') + (rv.outTime ? ` / 退所 ${rv.outTime}` : '')
-                              + (rv.soutai ? ` / ${rv.soutai}` : '')
-                              + (rv.note ? ` / ${rv.note}` : '')
-                              + (dupRoom ? `　※この部屋に${list.length}件が重なっています` : '')
-                              + (dupPerson ? '　※同じ人が同じ日に別の部屋にも入っています' : '')
-                              + '　（つまんで動かせます）'
-                            : `${iso} 空き`;
+                          const oneTitle = (x: Reservation) =>
+                            `${x.name}（${x.status}）${x.building}${pad2(x.room)}号 ${x.start}〜${x.end}`
+                            + (x.inTime ? ` / 入所 ${x.inTime}` : '') + (x.outTime ? ` / 退所 ${x.outTime}` : '')
+                            + (x.soutai ? ` / ${x.soutai}` : '') + (x.note ? ` / ${x.note}` : '');
+                          const title = handover
+                            ? `入れ替わりの日\n退所 ${oneTitle(leaving!)}\n入所 ${oneTitle(arriving!)}`
+                            : rv
+                              ? oneTitle(rv)
+                                + (dupRoom ? `　※この部屋に${list.length}件が重なっています` : '')
+                                + (dupPerson ? '　※同じ人が同じ日に別の部屋にも入っています' : '')
+                                + '　（つまんで動かせます）'
+                              : `${iso} 空き`;
                           return (
                             <td key={i} title={title}
                               draggable={!!rv && !busy}
@@ -848,7 +911,21 @@ export default function ReserveLedger({ year, month, people }: Props) {
                               onDrop={e => onDrop(e, b.name, rm.room, i)}
                               onClick={() => rv ? openEdit(rv) : openNew(b.name, rm.room, iso)}
                               className={`px-0 py-0.5 cursor-pointer hover:outline hover:outline-2 hover:outline-sky-400 ${rv ? 'rv-grab ' : ''}${isSource ? 'opacity-40 ' : ''}${dnd}${warn}${blk}${base}`}>
-                              {rv ? (
+                              {handover ? (
+                                // 入れ替わりの日：上＝出る人、下＝入る人
+                                <div className="rv-swap">
+                                  <div className={`rv-swap-half ${toneOf(leaving!)}`}
+                                    onClick={e => { e.stopPropagation(); openEdit(leaving!); }}>
+                                    <span className="rv-swap-time">↑{leaving!.outTime || '退'}</span>
+                                    <span className="rv-name rv-swap-name" style={{ fontSize: swapFontPxFor(leaving!.name) }}>{leaving!.name}</span>
+                                  </div>
+                                  <div className={`rv-swap-half ${toneOf(arriving!)}`}
+                                    onClick={e => { e.stopPropagation(); openEdit(arriving!); }}>
+                                    <span className="rv-swap-time">↓{arriving!.inTime || '入'}</span>
+                                    <span className="rv-name rv-swap-name" style={{ fontSize: swapFontPxFor(arriving!.name) }}>{arriving!.name}</span>
+                                  </div>
+                                </div>
+                              ) : rv ? (
                                 <>
                                   {showIn && <div className="rv-time">{timeLabel(rv, rv.inTime)}</div>}
                                   <div className="rv-name" style={{ fontSize: fontPxFor(rv.name) }}>
@@ -905,7 +982,10 @@ export default function ReserveLedger({ year, month, people }: Props) {
 
       {/* この月の予約一覧 */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-        <div className="px-3 py-2 font-bold text-sm bg-gray-50 border-b border-gray-200">{year}年{month}月にかかる予約（{rows.length}件）</div>
+        <div className="px-3 py-2 font-bold text-sm bg-gray-50 border-b border-gray-200">
+          {year}年{month}月にかかる予約（{rows.length}件）
+          <span className="ml-2 font-normal text-xs text-gray-400">あいうえお順</span>
+        </div>
         {rows.length === 0 ? (
           <div className="px-3 py-4 text-sm text-gray-400">この月の予約はまだありません。</div>
         ) : (
@@ -921,7 +1001,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
               </tr>
             </thead>
             <tbody>
-              {rows.map(r => (
+              {listRows.map(r => (
                 <tr key={r.id} className="border-t border-gray-100">
                   <td className="px-3 py-1.5 font-medium text-gray-800">{r.name}</td>
                   <td className="px-2 py-1.5 text-gray-600">{r.building}{pad2(r.room)}</td>

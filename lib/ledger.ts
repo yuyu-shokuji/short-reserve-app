@@ -102,6 +102,21 @@ function overlapDays(aStart: string, aEnd: string, bStart: string, bEnd: string)
   return s <= e ? eachDate(s, e) : [];
 }
 
+/**
+ * 同日交代かどうか。
+ * 片方の退所日ともう片方の入所日が同じ日で、重なりがその1日だけなら
+ * 「午前に出て午後に入る」ふつうの入れ替わりなので二重予約ではない。
+ * 例：A が 10:00 に退所、B が 11:00 に入所。
+ */
+export function isHandover(
+  aStart: string, aEnd: string, bStart: string, bEnd: string,
+): boolean {
+  const days = overlapDays(aStart, aEnd, bStart, bEnd);
+  if (days.length !== 1) return false;
+  const d = days[0];
+  return (aEnd === d && bStart === d) || (bEnd === d && aStart === d);
+}
+
 // ── シートの読み込み ─────────────────────────────────────────────────
 
 function cell(row: any[] | undefined, c: number): string {
@@ -229,7 +244,9 @@ export async function findVacancies(
   const vacancies: Vacancy[] = rooms.filter(r => !r.disabled && !r.staging).map(r => {
     const takenBy = reservations
       .filter(x => x.id !== excludeId && x.building === r.building && x.room === r.room
-        && overlaps(x.start, x.end, start, end))
+        && overlaps(x.start, x.end, start, end)
+        // 退所日と入所日が重なるだけの入れ替わりは「ふさがっている」に数えない
+        && !isHandover(x.start, x.end, start, end))
       .map(x => ({ name: x.name, start: x.start, end: x.end, status: x.status }));
     return { building: r.building, room: r.room, free: takenBy.length === 0, takenBy: takenBy.length ? takenBy : undefined };
   });
@@ -254,7 +271,11 @@ export async function findConflicts(cand: {
     if (cand.id && r.id === cand.id) continue;
     const days = overlapDays(r.start, r.end, cand.start, cand.end);
     if (!days.length) continue;
-    if (r.building === cand.building && r.room === cand.room) out.push({ kind: 'room', other: r, days });
+    if (r.building === cand.building && r.room === cand.room) {
+      // 同日交代（退所日＝入所日で、重なりがその1日だけ）はふつうの入れ替わりなので通す
+      if (isHandover(r.start, r.end, cand.start, cand.end)) continue;
+      out.push({ kind: 'room', other: r, days });
+    }
     else if (r.name === cand.name.trim()) out.push({ kind: 'person', other: r, days });
   }
   return out;
