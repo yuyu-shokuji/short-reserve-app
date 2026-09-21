@@ -194,11 +194,41 @@ export default function ReserveLedger({ year, month, people }: Props) {
     return bad;
   }, [rows, daysInMonth, year, month]);
 
+  /** 実在する部屋（仮置きと「使用しない」を除く）。稼働率と空き数の分母。 */
+  const realRooms = useMemo(() => rooms.filter(r => !r.disabled && !r.staging), [rooms]);
+
   // その日に空いている部屋数（仮置きは実在しないので数えない）
   const vacantPerDay = useMemo(() => Array.from({ length: daysInMonth }, (_, i) =>
-    rooms.filter(r => !r.disabled && !r.staging)
-      .reduce((n, r) => n + ((grid.get(`${r.building}-${r.room}`)?.[i]?.length ?? 0) ? 0 : 1), 0)),
-    [grid, rooms, daysInMonth]);
+    realRooms.reduce((n, r) => n + ((grid.get(`${r.building}-${r.room}`)?.[i]?.length ?? 0) ? 0 : 1), 0)),
+    [grid, realRooms, daysInMonth]);
+
+  /** 棟ごとの利用者数（その日その棟にいる人の数）。1部屋に2人重なっていれば2人と数える。 */
+  const countsPerBuilding = useMemo(() => {
+    const out = new Map<string, number[]>();
+    for (const b of buildings) {
+      if (b.staging) continue;
+      out.set(b.name, Array.from({ length: daysInMonth }, (_, i) => {
+        const names = new Set<string>();
+        for (const rm of b.rooms) {
+          if (rm.disabled) continue;
+          for (const rv of grid.get(`${b.name}-${rm.room}`)?.[i] ?? []) names.add(rv.name);
+        }
+        return names.size;
+      }));
+    }
+    return out;
+  }, [buildings, grid, daysInMonth]);
+
+  /**
+   * 稼働率＝（埋まっていた部屋×日）÷（部屋数×日数）。
+   * 例：30日の月で10日だけ全室満室、残り20日が全室空きなら 10/30 = 33%。
+   */
+  const occupancy = useMemo(() => {
+    const total = realRooms.length * daysInMonth;
+    if (!total) return null;
+    const used = vacantPerDay.reduce((n, v) => n + (realRooms.length - v), 0);
+    return { used, total, pct: Math.round((used / total) * 100) };
+  }, [realRooms, daysInMonth, vacantPerDay]);
 
   // ── 期間を入れたら空き部屋を調べる（問い合わせ中にすぐ答えるため） ──
   useEffect(() => {
@@ -394,8 +424,9 @@ export default function ReserveLedger({ year, month, people }: Props) {
         .rv-grab:active { cursor: grabbing; }
         /* 入所時間（初日の名前の上）・退所時間（最終日の名前の下）。家族送迎は FA 付き。 */
         .rv-time { font-size: 8px; line-height: 1.1; letter-spacing: -.04em; color: #334155; font-weight: 700; }
-        /* 氏名は苗字と名前で2段。1段あたりが短くなるぶん文字を大きくできる。 */
-        .rv-name { line-height: 1.12; }
+        /* 氏名は苗字と名前で2段。1段あたりが短くなるぶん文字を大きくできる。
+           書体はメイリオ指定（現場の見やすさ優先。無い環境では既定のゴシックに落ちる）。 */
+        .rv-name { line-height: 1.12; font-family: "Meiryo", "メイリオ", "Meiryo UI", sans-serif; }
       `}</style>
 
       <div className="rv-noprint flex items-center gap-3 flex-wrap">
@@ -403,6 +434,13 @@ export default function ReserveLedger({ year, month, people }: Props) {
         <span className="text-sm text-gray-500">
           確定 {rows.filter(r => r.status === '確定').length}件 ／ 仮予約 {rows.filter(r => r.status === '仮予約').length}件
         </span>
+        {occupancy && (
+          <span className="text-sm font-bold text-indigo-700"
+            title={`埋まっていた ${occupancy.used} 室日 ÷ ${realRooms.length}室 × ${daysInMonth}日 = ${occupancy.total} 室日`}>
+            稼働率 {occupancy.pct}%
+            <span className="ml-1 font-normal text-xs text-gray-400">（{occupancy.used}/{occupancy.total} 室日）</span>
+          </span>
+        )}
         {lastMove && (
           <button disabled={busy} onClick={doUndoMove}
             className="rounded-lg bg-amber-500 text-white px-3 py-2 text-sm font-bold hover:bg-amber-600 disabled:opacity-40">
@@ -636,8 +674,10 @@ export default function ReserveLedger({ year, month, people }: Props) {
                 <Fragment key={b.name}>
                   {b.rooms.map((rm, ri) => {
                     const cells = grid.get(`${b.name}-${rm.room}`) ?? [];
+                    // 利用者数の行を挟む棟では、棟の区切り線はそちらに付ける
+                    const isLastRoom = ri === b.rooms.length - 1;
                     return (
-                      <tr key={`${b.name}-${rm.room}`} className={ri === b.rooms.length - 1 ? 'rv-bldend' : ''}>
+                      <tr key={`${b.name}-${rm.room}`} className={isLastRoom && b.staging ? 'rv-bldend' : ''}>
                         {ri === 0 && (
                           <th rowSpan={b.rooms.length} style={{ left: 0 }}
                             className={`rv-fix px-1 py-1 text-[10px] font-bold ${
@@ -711,6 +751,27 @@ export default function ReserveLedger({ year, month, people }: Props) {
                       </tr>
                     );
                   })}
+                  {/* 棟ごとの利用者数（食事管理アプリの全体一覧と同じ見せ方） */}
+                  {!b.staging && (
+                    <tr className="rv-bldend">
+                      <th colSpan={2} style={{ left: 0 }}
+                        className={`rv-fix px-1 py-1 text-[10px] font-bold ${
+                          b.name === 'さくら' ? 'bg-rose-100 text-rose-800' : 'bg-purple-100 text-purple-800'}`}>
+                        {b.name} 計
+                      </th>
+                      {(countsPerBuilding.get(b.name) ?? []).map((c, i) => {
+                        const w = dowOf(year, month, i + 1);
+                        const full = c >= b.rooms.filter(r => !r.disabled).length;
+                        return (
+                          <td key={i} title={`${mdOf(isoOf(year, month, i + 1))} ${b.name} ${c}名`}
+                            className={`px-0.5 py-1 text-[11px] font-bold ${dowBg(w) || 'bg-gray-50'} ${
+                              !c ? 'text-gray-300' : full ? 'text-red-600' : 'text-emerald-700'}`}>
+                            {c || ''}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  )}
                 </Fragment>
               ))}
               {/* その日の空き部屋数（仮置きは数えない） */}
