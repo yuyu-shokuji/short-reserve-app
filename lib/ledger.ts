@@ -271,6 +271,11 @@ export interface SaveParams {
   inTime?: string;
   outTime?: string;
   note?: string;
+  /**
+   * 削除の取り消し用。同じIDの行が見つからなければ、そのIDのまま作り直す。
+   * これが無いと「消えている＝他の人が消した」とみなしてエラーにしてしまう。
+   */
+  restore?: boolean;
 }
 
 function validate(p: SaveParams, rooms: Room[]): void {
@@ -297,10 +302,13 @@ export async function saveReservation(p: SaveParams): Promise<string> {
     } else {
       rowIdx = grid.rows.findIndex((r, i) => i >= 1 && cell(r, grid.col['ID']) === p.id);
     }
+    // 取り消しのときだけ、消えている行を同じIDで作り直す
+    if (rowIdx < 1 && p.restore) rowIdx = grid.rows.length;
     if (rowIdx < 1) throw new Error('この予約は見つかりませんでした（他の人が消した可能性があります）');
   } else {
     rowIdx = grid.rows.length;   // 末尾に追加
   }
+  const isNewRow = rowIdx >= grid.rows.length;
 
   const id = (p.id && !p.id.startsWith('#')) ? p.id
     : `R${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36).padStart(2, '0')}`;
@@ -327,7 +335,7 @@ export async function saveReservation(p: SaveParams): Promise<string> {
   put('入所時間', (p.inTime ?? '').trim());
   put('退所時間', (p.outTime ?? '').trim());
   put('備考', (p.note ?? '').trim());
-  if (!p.id) put('登録日時', nowStamp());
+  if (isNewRow) put('登録日時', nowStamp());
 
   await batchWrite(writes, clears);
   return id;

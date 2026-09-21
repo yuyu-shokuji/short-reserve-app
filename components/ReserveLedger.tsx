@@ -105,8 +105,8 @@ interface FormState {
 interface DragState { rv: Reservation; grabIdx: number; }
 /** ドロップ先のプレビュー（この部屋のこの期間に入る） */
 interface DropPreview { building: string; room: number; start: string; end: string; }
-/** 移動しようとして重なりが見つかったとき */
-interface MoveAsk { rv: Reservation; building: string; room: number; start: string; end: string; conflicts: Conflict[]; }
+/** 書こうとしたら重なりが見つかったときの確認（移動・削除の取り消しで共用） */
+interface AskState { title: string; conflicts: Conflict[]; confirmLabel: string; onConfirm: () => void; }
 
 interface Props { year: number; month: number; people: Person[]; }
 
@@ -127,9 +127,10 @@ export default function ReserveLedger({ year, month, people }: Props) {
   // ドラッグ＆ドロップ
   const [drag, setDrag] = useState<DragState | null>(null);
   const [preview, setPreview] = useState<DropPreview | null>(null);
-  const [moveAsk, setMoveAsk] = useState<MoveAsk | null>(null);
-  // 直前の1回だけ戻せるようにする（掴み間違いの取り消し）
+  const [ask, setAsk] = useState<AskState | null>(null);
+  // 直前の1回だけ戻せるようにする（掴み間違い・消し間違いの取り消し）
   const [lastMove, setLastMove] = useState<{ id: string; name: string; building: string; room: number; start: string; end: string } | null>(null);
+  const [lastDelete, setLastDelete] = useState<Reservation | null>(null);
 
   const load = useCallback(async (silent = false) => {
     if (!silent) { setLoading(true); setError(''); }
@@ -147,7 +148,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
   }, [year, month]);
 
   useEffect(() => {
-    setForm(null); setConflicts(null); setMsg(''); setMoveAsk(null); setLastMove(null);
+    setForm(null); setConflicts(null); setMsg(''); setAsk(null); setLastMove(null); setLastDelete(null);
     load();
   }, [load]);
 
@@ -288,7 +289,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
 
   const doDelete = async () => {
     if (!form?.id) return;
-    if (!window.confirm(`${form.name} さん（${form.building}${pad2(form.room)}号 ${form.start}〜${form.end}）の予約を削除します。よろしいですか？`)) return;
+    if (!window.confirm(`${form.name} さん（${form.building}${pad2(form.room)}号 ${form.start}〜${form.end}）の予約を削除します。よろしいですか？\n（消したあと「↩ 削除を取り消す」で戻せます）`)) return;
     setBusy(true); setMsg('');
     try {
       const res = await fetch('/api/reserve', {
@@ -298,8 +299,35 @@ export default function ReserveLedger({ year, month, people }: Props) {
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? '削除エラー');
       setForm(null); setConflicts(null);
+      setLastDelete(j.removed ?? null);   // 取り消せるように消した中身を覚えておく
       await load(true);
-      setMsg(`✓ ${j.removed?.name ?? ''} さんの予約を削除しました`);
+      setMsg(`✓ ${j.removed?.name ?? ''} さんの予約を削除しました（取り消せます）`);
+    } catch (e: any) { setMsg(`⚠ ${e.message}`); } finally { setBusy(false); }
+  };
+
+  /** 削除の取り消し。消したときと同じIDで作り直すので、消す前と同じ行に戻る。 */
+  const restoreDeleted = async (force = false) => {
+    const rv = lastDelete;
+    if (!rv) return;
+    setBusy(true); setMsg('');
+    try {
+      const res = await fetch('/api/reserve', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...rv, restore: true, force }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error ?? '取り消しエラー');
+      if (j.conflict) {
+        setAsk({
+          title: `${rv.name} さん（${rv.building}${pad2(rv.room)}号 ${mdOf(rv.start)}〜${mdOf(rv.end)}）を戻すと重なります（まだ戻していません）`,
+          conflicts: j.conflicts, confirmLabel: '重なったまま戻す',
+          onConfirm: () => restoreDeleted(true),
+        });
+        return;
+      }
+      setAsk(null); setLastDelete(null);
+      await load(true);
+      setMsg(`↩ ${rv.name} さん（${rv.building}${pad2(rv.room)}号 ${mdOf(rv.start)}〜${mdOf(rv.end)}）の削除を取り消しました`);
     } catch (e: any) { setMsg(`⚠ ${e.message}`); } finally { setBusy(false); }
   };
 
@@ -325,8 +353,15 @@ export default function ReserveLedger({ year, month, people }: Props) {
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? '移動エラー');
-      if (j.conflict) { setMoveAsk({ rv, building, room, start, end, conflicts: j.conflicts }); return; }
-      setMoveAsk(null);
+      if (j.conflict) {
+        setAsk({
+          title: `${rv.name} さんを ${building}${pad2(room)}号 ${mdOf(start)}〜${mdOf(end)} へ移すと重なります（まだ動かしていません）`,
+          conflicts: j.conflicts, confirmLabel: '重なったまま移す',
+          onConfirm: () => moveReservation(rv, building, room, start, end, { force: true }),
+        });
+        return;
+      }
+      setAsk(null);
       // 戻した直後にまた「戻す」が出ると混乱するので、undo のときは覚えない
       setLastMove(opts?.undo ? null
         : { id: rv.id, name: rv.name, building: rv.building, room: rv.room, start: rv.start, end: rv.end });
@@ -351,7 +386,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
   const onDragStart = (e: React.DragEvent, rv: Reservation, idx: number) => {
     if (busy) { e.preventDefault(); return; }
     setDrag({ rv, grabIdx: idx });
-    setMoveAsk(null);
+    setAsk(null);
     e.dataTransfer.effectAllowed = 'move';
     // Firefox はデータを入れないとドラッグが始まらない
     e.dataTransfer.setData('text/plain', rv.id);
@@ -441,6 +476,13 @@ export default function ReserveLedger({ year, month, people }: Props) {
             <span className="ml-1 font-normal text-xs text-gray-400">（{occupancy.used}/{occupancy.total} 室日）</span>
           </span>
         )}
+        {lastDelete && (
+          <button disabled={busy} onClick={() => restoreDeleted()}
+            title={`${lastDelete.name} さん ${lastDelete.building}${pad2(lastDelete.room)}号 ${lastDelete.start}〜${lastDelete.end}`}
+            className="rounded-lg bg-red-600 text-white px-3 py-2 text-sm font-bold hover:bg-red-700 disabled:opacity-40">
+            ↩ 削除を取り消す（{lastDelete.name}）
+          </button>
+        )}
         {lastMove && (
           <button disabled={busy} onClick={doUndoMove}
             className="rounded-lg bg-amber-500 text-white px-3 py-2 text-sm font-bold hover:bg-amber-600 disabled:opacity-40">
@@ -475,26 +517,24 @@ export default function ReserveLedger({ year, month, people }: Props) {
         </div>
       )}
 
-      {/* 移動先が埋まっていたときの確認 */}
-      {moveAsk && (
+      {/* 書こうとしたら重なっていたときの確認（移動・削除の取り消しで共用） */}
+      {ask && (
         <div className="rv-noprint rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 space-y-2">
-          <div className="font-bold">
-            ⚠ {moveAsk.rv.name} さんを {moveAsk.building}{pad2(moveAsk.room)}号 {mdOf(moveAsk.start)}〜{mdOf(moveAsk.end)} へ移すと重なります（まだ動かしていません）
-          </div>
+          <div className="font-bold">⚠ {ask.title}</div>
           <ul className="list-disc pl-5 max-h-32 overflow-y-auto">
-            {moveAsk.conflicts.map((c, i) => (
+            {ask.conflicts.map((c, i) => (
               <li key={i}>
                 {c.kind === 'room'
-                  ? <>移動先に <b>{c.other.name}</b> さんの{c.other.status}：{mdOf(c.days[0])}〜{mdOf(c.days[c.days.length - 1])}</>
+                  ? <>その部屋に <b>{c.other.name}</b> さんの{c.other.status}：{mdOf(c.days[0])}〜{mdOf(c.days[c.days.length - 1])}</>
                   : <><b className="text-red-700">同じ人を別の部屋にも</b>：{c.other.building}{pad2(c.other.room)}号 にも{c.other.status}（{mdOf(c.days[0])}〜{mdOf(c.days[c.days.length - 1])}）</>}
               </li>
             ))}
           </ul>
           <div className="flex items-center gap-2 flex-wrap">
-            <button disabled={busy} onClick={() => moveReservation(moveAsk.rv, moveAsk.building, moveAsk.room, moveAsk.start, moveAsk.end, { force: true })}
-              className="px-3 py-1.5 rounded-lg bg-red-600 text-white font-bold hover:bg-red-700 disabled:opacity-40">重なったまま移す</button>
-            <button disabled={busy} onClick={() => setMoveAsk(null)} className="px-2 py-1.5 text-amber-700 underline">やめる</button>
-            <span className="text-xs text-amber-700">※ 先に「仮置き」へ逃がすと入れ替えができます</span>
+            <button disabled={busy} onClick={ask.onConfirm}
+              className="px-3 py-1.5 rounded-lg bg-red-600 text-white font-bold hover:bg-red-700 disabled:opacity-40">{ask.confirmLabel}</button>
+            <button disabled={busy} onClick={() => setAsk(null)} className="px-2 py-1.5 text-amber-700 underline">やめる</button>
+            <span className="text-xs text-amber-700">※ 入れ替えたいときは、先に片方を「仮置き」へ逃がしてください</span>
           </div>
         </div>
       )}
@@ -836,7 +876,9 @@ export default function ReserveLedger({ year, month, people }: Props) {
       <p className="rv-noprint text-xs text-gray-400">
         ※ <b>予約のマスはつまんで動かせます</b>（部屋替えと日付ずらしが同時にできます。塊ごと動き、泊数は変わりません）。
         動かす先が埋まっているときは確認してから動かします。入れ替えたいときは、先に片方を<b>「仮置き」</b>へ逃がしてください
-        （仮置きは実在しない部屋なので、空き部屋数や空き検索には出ません）。移動は「↩ 直前の移動を戻す」で1回だけ取り消せます。
+        （仮置きは実在しない部屋なので、空き部屋数や空き検索には出ません）。
+        移動は「↩ 直前の移動を戻す」、削除は「↩ 削除を取り消す」で、それぞれ直前の1回を取り消せます
+        （消したときと同じ内容でそのまま戻ります。ただし画面を開き直すと取り消せなくなります）。
         空きマスをクリックで追加、予約のマスをクリックで編集。期間を入れると、その期間を丸ごと押さえられる部屋が選択肢に「○」で出ます。
         入所時間は初日の名前の上、退所時間は最終日の名前の下に出ます。<b>家族送迎</b>のときは時間の前に <b>FA</b> が付きます
         （時間の入力は送迎の有無とは別で、送迎なしでも入れられます）。
