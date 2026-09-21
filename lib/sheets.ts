@@ -7,11 +7,12 @@ import { google } from 'googleapis';
 import path from 'path';
 
 /**
- * 予約台帳スプレッドシートのID。
- * scripts/setup-spreadsheet.mjs で作ったものを入れる。環境変数があればそちらが優先。
+ * 予約台帳スプレッドシートのID（このアプリ専用。食事管理のファイルとは別物）。
+ * 「ショート予約台帳」＝ yuyu.shokuji のドライブにあり meal-bot に編集権限を共有ずみ。
+ * 環境変数 RESERVE_SPREADSHEET_ID があればそちらが優先（公開時に差し替えられるように）。
  */
 export const RESERVE_SPREADSHEET_ID =
-  process.env.RESERVE_SPREADSHEET_ID || '__SET_ME__';
+  process.env.RESERVE_SPREADSHEET_ID || '1fjTPoqiDDHnGSfoYh9XqkEMK8JcmBThyxzbnO4CDtZE';
 
 export const SHEET = {
   reserve: '予約',
