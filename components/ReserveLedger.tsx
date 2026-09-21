@@ -48,10 +48,21 @@ const dowOf = (y: number, m: number, d: number) => WD[new Date(y, m - 1, d).getD
 const dowColor = (w: string) => (w === '日' ? 'text-red-500' : w === '土' ? 'text-blue-500' : 'text-gray-500');
 const dowBg = (w: string) => (w === '日' ? 'bg-red-50' : w === '土' ? 'bg-blue-50' : '');
 
-/** 名前が長いほど文字を小さくして列に収める */
+/** 「曽我　伸子」→ ['曽我','伸子']。区切りが無ければ1段のまま。 */
+function splitName(s: string): [string, string] {
+  const parts = String(s ?? '').trim().split(/[\s　]+/).filter(Boolean);
+  if (parts.length >= 2) return [parts[0], parts.slice(1).join('')];
+  return [String(s ?? '').trim(), ''];
+}
+
+/**
+ * 列幅に収まる文字サイズ。苗字と名前を2段に分けたので、長いほうの段で決める。
+ * 1段だったころより1段あたりの文字数が減るぶん、文字を大きくできる。
+ */
 function fontPxFor(s: string): number {
-  const n = Math.max(1, (s || '').length);
-  return Math.max(6, Math.min(11, Math.floor(DAY_W / n)));
+  const [a, b] = splitName(s);
+  const n = Math.max(1, a.length, b.length);
+  return Math.max(7, Math.min(13, Math.floor(DAY_W / n)));
 }
 
 const todayISO = () => {
@@ -360,8 +371,18 @@ export default function ReserveLedger({ year, month, people }: Props) {
           .rv-fix { position: static !important; }
         }
         .rv-table { border-collapse: collapse; table-layout: fixed; }
-        .rv-table th, .rv-table td { border: 1px solid #e5e7eb; white-space: nowrap; text-align: center; overflow: hidden; }
-        .rv-table tbody tr.rv-bldend td, .rv-table tbody tr.rv-bldend th { border-bottom: 2px solid #cbd5e1; }
+        /* 横線（部屋と部屋の区切り）は縦線より太くする＝行を目で追いやすい */
+        .rv-table th, .rv-table td {
+          border: 1px solid #eef1f5; border-bottom: 2px solid #cbd5e1;
+          white-space: nowrap; text-align: center; overflow: hidden;
+        }
+        .rv-table tbody tr.rv-bldend td, .rv-table tbody tr.rv-bldend th { border-bottom: 3px solid #94a3b8; }
+        /* 予約の塊を枠で囲う。border-collapse と喧嘩しないよう内側の影で描く。
+           月をまたぐ滞在は、月の端では縦線を引かない（続いていることが分かるように）。 */
+        .rv-blk   { box-shadow: inset 0 2px 0 #1e293b, inset 0 -2px 0 #1e293b; }
+        .rv-blk-s { box-shadow: inset 0 2px 0 #1e293b, inset 0 -2px 0 #1e293b, inset 2px 0 0 #1e293b; }
+        .rv-blk-e { box-shadow: inset 0 2px 0 #1e293b, inset 0 -2px 0 #1e293b, inset -2px 0 0 #1e293b; }
+        .rv-blk-se{ box-shadow: inset 0 2px 0 #1e293b, inset 0 -2px 0 #1e293b, inset 2px 0 0 #1e293b, inset -2px 0 0 #1e293b; }
         /* 左に固定する2列。背景色は各セルのクラスに任せる（ここで白を敷くと棟の色が消える）。 */
         .rv-fix { position: sticky; }
         .rv-table thead .rv-fix { z-index: 25; }
@@ -372,7 +393,9 @@ export default function ReserveLedger({ year, month, people }: Props) {
         .rv-grab { cursor: grab; }
         .rv-grab:active { cursor: grabbing; }
         /* 入所時間（初日の名前の上）・退所時間（最終日の名前の下）。家族送迎は FA 付き。 */
-        .rv-time { font-size: 8px; line-height: 1.1; letter-spacing: -.02em; color: #334155; font-weight: 700; }
+        .rv-time { font-size: 8px; line-height: 1.1; letter-spacing: -.04em; color: #334155; font-weight: 700; }
+        /* 氏名は苗字と名前で2段。1段あたりが短くなるぶん文字を大きくできる。 */
+        .rv-name { line-height: 1.12; }
       `}</style>
 
       <div className="rv-noprint flex items-center gap-3 flex-wrap">
@@ -636,11 +659,16 @@ export default function ReserveLedger({ year, month, people }: Props) {
                             && iso >= preview.start && iso <= preview.end;
                           const base = !rv
                             ? (b.staging ? 'bg-slate-50 ' : '') + (dowBg(w) || '') + ' text-gray-300'
-                            : rv.status === '確定' ? 'bg-emerald-100 text-emerald-900 font-medium'
-                            : 'bg-amber-50 text-amber-800 rv-kari';
+                            : rv.status === '確定' ? 'bg-indigo-100 text-indigo-950 font-semibold'
+                            : 'bg-amber-50 text-amber-900 font-semibold rv-kari';
+                          // 塊の枠：月をまたぐぶんは端の縦線を出さない
+                          const blkS = !!rv && iso === rv.start;
+                          const blkE = !!rv && iso === rv.end;
+                          const blk = !rv ? ''
+                            : blkS && blkE ? 'rv-blk-se ' : blkS ? 'rv-blk-s ' : blkE ? 'rv-blk-e ' : 'rv-blk ';
                           const warn = dupRoom ? 'outline outline-2 outline-red-500 '
                             : dupPerson ? 'outline outline-2 outline-red-400 bg-red-100 ' : '';
-                          const dnd = inPreview ? 'outline outline-2 outline-sky-500 bg-sky-100 ' : '';
+                          const dnd = inPreview ? 'outline outline-2 outline-sky-600 bg-sky-200 ' : '';
                           // 入所時間は初日の名前の上、退所時間は最終日の名前の下に出す。
                           // 家族送迎は時間の前に FA。単日の予約は1マスに上下とも出る。
                           const showIn = !!rv && iso === rv.start && !!rv.inTime;
@@ -662,11 +690,18 @@ export default function ReserveLedger({ year, month, people }: Props) {
                               onDragOver={e => onDragOver(e, b.name, rm.room, i)}
                               onDrop={e => onDrop(e, b.name, rm.room, i)}
                               onClick={() => rv ? openEdit(rv) : openNew(b.name, rm.room, iso)}
-                              className={`px-0 py-1 cursor-pointer hover:outline hover:outline-2 hover:outline-sky-400 ${rv ? 'rv-grab ' : ''}${isSource ? 'opacity-40 ' : ''}${dnd}${warn}${base}`}>
+                              className={`px-0 py-0.5 cursor-pointer hover:outline hover:outline-2 hover:outline-sky-400 ${rv ? 'rv-grab ' : ''}${isSource ? 'opacity-40 ' : ''}${dnd}${warn}${blk}${base}`}>
                               {rv ? (
                                 <>
                                   {showIn && <div className="rv-time">{timeLabel(rv, rv.inTime)}</div>}
-                                  <div style={{ fontSize: fontPxFor(rv.name) }}>{rv.name}</div>
+                                  <div className="rv-name" style={{ fontSize: fontPxFor(rv.name) }}>
+                                    {(() => { const [sur, given] = splitName(rv.name); return (
+                                      <>
+                                        <div>{sur}</div>
+                                        {given && <div>{given}</div>}
+                                      </>
+                                    ); })()}
+                                  </div>
                                   {showOut && <div className="rv-time">{timeLabel(rv, rv.outTime)}</div>}
                                 </>
                               ) : '・'}
