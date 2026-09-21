@@ -32,7 +32,8 @@ export async function POST(req: NextRequest) {
     const id = await saveReservation({
       id: p.id, name: p.name, building: p.building, room: Number(p.room),
       start: p.start, end: p.end, status: p.status === '確定' ? '確定' : '仮予約',
-      soutai: !!p.soutai, pickupTime: p.pickupTime, dropTime: p.dropTime, note: p.note,
+      soutai: p.soutai === '家族送迎' ? '家族送迎' : p.soutai === '送迎あり' ? '送迎あり' : '',
+      inTime: p.inTime, outTime: p.outTime, note: p.note,
     });
     return NextResponse.json({ ok: true, id });
   } catch (e: any) {

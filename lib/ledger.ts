@@ -10,27 +10,46 @@
 
 import { readSheets, writeSheetAoa, batchWrite, SHEET, type CellWrite, type CellClear } from './sheets';
 
-const COLS = ['ID', '氏名', '棟', '部屋', '開始日', '終了日', '状態', '送迎', '迎え時間', '送り時間', '備考', '登録日時'] as const;
+const COLS = ['ID', '氏名', '棟', '部屋', '開始日', '終了日', '状態', '送迎', '入所時間', '退所時間', '備考', '登録日時'] as const;
 
 export type ReserveStatus = '仮予約' | '確定';
+
+/** 送迎の区分。'' ＝なし。家族送迎は画面で「FA」と出す。 */
+export type SoutaiKind = '' | '送迎あり' | '家族送迎';
 
 export interface Reservation {
   id: string;
   name: string;
   building: string;
   room: number;
-  start: string;      // YYYY-MM-DD（初日＝入所日）
-  end: string;        // YYYY-MM-DD（最終日＝退所日）
+  start: string;       // YYYY-MM-DD（初日＝入所日）
+  end: string;         // YYYY-MM-DD（最終日＝退所日）
   status: ReserveStatus;
-  soutai: boolean;    // 送迎あり
-  pickupTime: string; // 迎え（入所日）
-  dropTime: string;   // 送り（退所日）
+  soutai: SoutaiKind;
+  // 入退所の時間は送迎の有無と関係なく使う（送迎なしでも来所・帰宅の時間は要る）
+  inTime: string;      // 入所時間（初日）
+  outTime: string;     // 退所時間（最終日）
   note: string;
   createdAt: string;
-  rowIdx: number;     // シート上の行（0始まり・内部用）
+  rowIdx: number;      // シート上の行（0始まり・内部用）
 }
 
-export interface Room { building: string; room: number; disabled: boolean; note: string; }
+/** シートの表記ゆれを吸収する（'あり' など古い書き方も拾う） */
+function parseSoutai(raw: string): SoutaiKind {
+  const s = raw.trim();
+  if (!s || s === 'なし') return '';
+  if (s.includes('家族')) return '家族送迎';
+  return '送迎あり';
+}
+
+export interface Room {
+  building: string;
+  room: number;
+  disabled: boolean;
+  /** 仮置き＝入れ替え作業の一時置き場。実在しないので空き部屋数にも空き検索にも数えない。 */
+  staging: boolean;
+  note: string;
+}
 export interface Person { name: string; furi: string; contact: string; note: string; }
 
 // ── 日付ヘルパー（すべて YYYY-MM-DD のローカル日付として扱う） ───────────
@@ -105,7 +124,6 @@ function parseRow(row: any[], col: Record<string, number>, rowIdx: number): Rese
   const start = cell(row, col['開始日']);
   const end = cell(row, col['終了日']);
   if (!name || !parseISO(start) || !parseISO(end)) return null;
-  const soutai = cell(row, col['送迎']);
   return {
     // 手で足された行（IDなし）も拾えるよう、無ければ行番号から作る
     id: cell(row, col['ID']) || `#${rowIdx}`,
@@ -114,9 +132,9 @@ function parseRow(row: any[], col: Record<string, number>, rowIdx: number): Rese
     room: Number(cell(row, col['部屋'])) || 0,
     start, end,
     status: cell(row, col['状態']) === '確定' ? '確定' : '仮予約',
-    soutai: soutai !== '' && soutai !== 'なし',
-    pickupTime: cell(row, col['迎え時間']),
-    dropTime: cell(row, col['送り時間']),
+    soutai: parseSoutai(cell(row, col['送迎'])),
+    inTime: cell(row, col['入所時間']),
+    outTime: cell(row, col['退所時間']),
     note: cell(row, col['備考']),
     createdAt: cell(row, col['登録日時']),
     rowIdx,
@@ -136,12 +154,13 @@ async function loadAll(): Promise<{ grid: Grid; reservations: Reservation[]; roo
     a.start.localeCompare(b.start) || a.building.localeCompare(b.building, 'ja') || a.room - b.room);
 
   const roomRows = s[SHEET.rooms] ?? [];
-  const rc = indexColumns(roomRows, ['棟', '部屋', '使用しない', '備考']).col;
+  const rc = indexColumns(roomRows, ['棟', '部屋', '使用しない', '仮置き', '備考']).col;
   const rooms: Room[] = roomRows.slice(1)
     .map(r => ({
       building: cell(r, rc['棟']),
       room: Number(cell(r, rc['部屋'])) || 0,
       disabled: cell(r, rc['使用しない']) !== '',
+      staging: cell(r, rc['仮置き']) !== '',
       note: cell(r, rc['備考']),
     }))
     .filter(r => r.building && r.room);
@@ -203,7 +222,8 @@ export async function findVacancies(
     throw new Error('期間が正しくありません');
   }
   const { reservations, rooms } = await loadAll();
-  const vacancies: Vacancy[] = rooms.filter(r => !r.disabled).map(r => {
+  // 仮置きは実在する部屋ではないので「空いている部屋」に出さない
+  const vacancies: Vacancy[] = rooms.filter(r => !r.disabled && !r.staging).map(r => {
     const takenBy = reservations
       .filter(x => x.id !== excludeId && x.building === r.building && x.room === r.room
         && overlaps(x.start, x.end, start, end))
@@ -247,9 +267,9 @@ export interface SaveParams {
   start: string;
   end: string;
   status: ReserveStatus;
-  soutai?: boolean;
-  pickupTime?: string;
-  dropTime?: string;
+  soutai?: SoutaiKind;
+  inTime?: string;
+  outTime?: string;
   note?: string;
 }
 
@@ -302,9 +322,10 @@ export async function saveReservation(p: SaveParams): Promise<string> {
   put('開始日', p.start);
   put('終了日', p.end);
   put('状態', p.status === '確定' ? '確定' : '仮予約');
-  put('送迎', p.soutai ? 'あり' : '');
-  put('迎え時間', p.soutai ? (p.pickupTime ?? '').trim() : '');
-  put('送り時間', p.soutai ? (p.dropTime ?? '').trim() : '');
+  // 送迎の有無と入退所の時間は独立。送迎なしでも時間は残す。
+  put('送迎', p.soutai === '家族送迎' ? '家族送迎' : p.soutai === '送迎あり' ? '送迎あり' : '');
+  put('入所時間', (p.inTime ?? '').trim());
+  put('退所時間', (p.outTime ?? '').trim());
   put('備考', (p.note ?? '').trim());
   if (!p.id) put('登録日時', nowStamp());
 

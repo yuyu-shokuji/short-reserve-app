@@ -47,7 +47,7 @@ const SHEETS = {
 // 予約シートの見出し。列は必ず見出し名で探すので、順番を変えても壊れない。
 const RESERVE_HEADER = ['ID', '氏名', '棟', '部屋', '開始日', '終了日', '状態', '送迎', '迎え時間', '送り時間', '備考', '登録日時'];
 const PEOPLE_HEADER  = ['氏名', 'ふりがな', '連絡先', '備考'];
-const ROOMS_HEADER   = ['棟', '部屋', '使用しない', '備考'];
+const ROOMS_HEADER   = ['棟', '部屋', '使用しない', '仮置き', '備考'];
 
 async function readAoa(spreadsheetId, name) {
   const res = await sheets.spreadsheets.values.get({
@@ -149,14 +149,15 @@ async function buildDummy() {
     })
     .map(p => [p.name, p.furi, '', '']);
 
-  // 部屋
+  // 部屋（最後に入れ替え用の仮置きを1つ足す。空き部屋数には数えない）
   const rooms = [];
   for (let i = 0; i < ROOM_ROWS; i++) {
     const row = rec[SHORT_DATA_R + i] ?? [];
     const b = String(row[0] ?? '').trim();
     const n = Number(row[1] ?? 0);
-    if (b && n) rooms.push([b, n, '', '']);
+    if (b && n) rooms.push([b, n, '', '', '']);
   }
+  rooms.push(['仮置き', 1, '', 'あり', '入れ替え用の一時置き場（空き部屋数には数えません）']);
 
   // 予約：部屋ごとに氏名列の連続した同じ名前を1件に畳む
   const reserves = [];
