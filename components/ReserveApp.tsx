@@ -1,27 +1,25 @@
 'use client';
 
-// アプリの外枠。月の切り替えは「予約台帳」と「書き出し確認」で共有する
-// （台帳で11月を見てから確認タブに移ると、そのまま11月の月シートが出る）。
+// アプリの外枠。ヘッダーと月送りだけを持ち、中身は ReserveLedger。
 
 import { useCallback, useEffect, useState } from 'react';
 import ReserveLedger from './ReserveLedger';
-import MonthOverview from './MonthOverview';
 
-type Tab = 'ledger' | 'check';
+export interface Person { name: string; furi: string; contact: string; note: string; }
 
 export default function ReserveApp() {
   const now = new Date();
-  const [year, setYear]   = useState(now.getFullYear());
+  const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
-  const [tab, setTab]     = useState<Tab>('ledger');
-  const [occupants, setOccupants] = useState<string[]>([]);
+  const [people, setPeople] = useState<Person[]>([]);
+  const [setupError, setSetupError] = useState('');
 
-  // 氏名の候補（ショート_名）。1回読めば十分なので起動時だけ。
+  // 氏名の候補（利用者シート）。滅多に変わらないので起動時だけ読む。
   useEffect(() => {
-    fetch('/api/roster', { cache: 'no-store' })
+    fetch('/api/master', { cache: 'no-store' })
       .then(r => r.json())
-      .then(j => { if (Array.isArray(j.occupants)) setOccupants(j.occupants); })
-      .catch(() => {});
+      .then(j => { if (j.error) setSetupError(j.error); else setPeople(j.people ?? []); })
+      .catch(e => setSetupError(String(e)));
   }, []);
 
   const shiftMonth = useCallback((delta: number) => {
@@ -31,10 +29,6 @@ export default function ReserveApp() {
   }, [year, month]);
 
   const isThisMonth = year === now.getFullYear() && month === now.getMonth() + 1;
-
-  const tabCls = (t: Tab) =>
-    `flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all ${
-      tab === t ? 'bg-white shadow text-gray-800' : 'text-gray-500 hover:text-gray-700'}`;
 
   return (
     <div className="w-full px-2 py-4 mx-auto space-y-4">
@@ -61,13 +55,13 @@ export default function ReserveApp() {
         </div>
       </div>
 
-      <div className="rsv-noprint flex rounded-2xl bg-gray-100 p-1 gap-1">
-        <button onClick={() => setTab('ledger')} className={tabCls('ledger')}>🗂 予約台帳</button>
-        <button onClick={() => setTab('check')} className={tabCls('check')}>📋 書き出し確認</button>
-      </div>
-
-      {tab === 'ledger' && <ReserveLedger year={year} month={month} occupants={occupants} />}
-      {tab === 'check'  && <MonthOverview year={year} month={month} />}
+      {setupError ? (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          ⚠ {setupError}
+        </div>
+      ) : (
+        <ReserveLedger year={year} month={month} people={people} />
+      )}
     </div>
   );
 }

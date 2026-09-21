@@ -1,17 +1,35 @@
-// Googleスプレッドシートの読み書き。
-// meal-app の lib/sheets-client.ts から、予約台帳に要る部分だけを持ってきたもの。
-// 対象月の上書き(x-ym/クッキー)・単価設定・スプレッドシート新規作成は不要なので入れていない
-// （このアプリは年月を必ず画面から明示的に受け取る）。
+// 予約台帳アプリ専用スプレッドシートの読み書き。
+//
+// このアプリは食事管理アプリとは別のスプレッドシート1つだけを見る（まずは単体で作るため）。
+// 食事管理側のデータには一切触らない。連動は後で足す。
 
 import { google } from 'googleapis';
 import path from 'path';
 
-// ── 設定スプレッドシート（永続固定・月レジストリと予約台帳の置き場） ──────
-// 6月のスプレッドシートをアンカーとして使う。削除禁止。
-export const CONFIG_SPREADSHEET_ID = '1zEgwHuqkBoiMKE5WWqGLZSEa7w9ItCw916ne645NvGY';
-const REGISTRY_SHEET = '月レジストリ';
+/**
+ * 予約台帳スプレッドシートのID。
+ * scripts/setup-spreadsheet.mjs で作ったものを入れる。環境変数があればそちらが優先。
+ */
+export const RESERVE_SPREADSHEET_ID =
+  process.env.RESERVE_SPREADSHEET_ID || '__SET_ME__';
 
-// 予約台帳は ショート_記録 へ書き出すので読み書き権限が要る（厨房・経理アプリは読み取りのみ）。
+export const SHEET = {
+  reserve: '予約',
+  people: '利用者',
+  rooms: '部屋',
+} as const;
+
+function assertConfigured(): string {
+  if (!RESERVE_SPREADSHEET_ID || RESERVE_SPREADSHEET_ID === '__SET_ME__') {
+    throw new Error(
+      '予約台帳スプレッドシートが未設定です。lib/sheets.ts の RESERVE_SPREADSHEET_ID に、' +
+      'scripts/setup-spreadsheet.mjs で用意したスプレッドシートのIDを入れてください',
+    );
+  }
+  return RESERVE_SPREADSHEET_ID;
+}
+
+// 予約の登録・変更しかしないので、必要な権限はスプレッドシートの読み書きだけ。
 const SCOPES = ['https://www.googleapis.com/auth/spreadsheets'];
 
 let _sheets: ReturnType<typeof google.sheets> | null = null;
@@ -21,7 +39,7 @@ async function getAuth(): Promise<InstanceType<typeof google.auth.GoogleAuth>> {
   if (jsonEnv) {
     return new google.auth.GoogleAuth({ credentials: JSON.parse(jsonEnv), scopes: SCOPES });
   }
-  // ローカル開発用。Vercelでは上の環境変数を使う。
+  // ローカル開発用。公開時は上の環境変数を使う。
   const keyFile = path.join(process.cwd(), '..', 'sheets-migration', 'service-account-key.json');
   return new google.auth.GoogleAuth({ keyFile, scopes: SCOPES });
 }
@@ -53,40 +71,6 @@ async function withRetry<T>(fn: () => Promise<T>, tries = 3): Promise<T> {
   throw last;
 }
 
-// ── 月レジストリ（どの月がどのスプレッドシートか） ─────────────────────
-export type MonthEntry = { year: number; month: number; spreadsheetId: string };
-
-let _months: MonthEntry[] | null = null;
-let _monthsAt = 0;
-const REGISTRY_TTL = 60000;   // 月の追加は稀
-
-/** 登録済み月の一覧（昇順）。 */
-export async function listSheetMonths(): Promise<MonthEntry[]> {
-  const now = Date.now();
-  if (_months && now - _monthsAt < REGISTRY_TTL) return _months;
-  const sh = await getSheetsClient();
-  const res = await withRetry(() => sh.spreadsheets.values.get({
-    spreadsheetId: CONFIG_SPREADSHEET_ID,
-    range: `'${REGISTRY_SHEET}'`,
-    valueRenderOption: 'UNFORMATTED_VALUE',
-  }));
-  const rows: any[][] = res.data.values ?? [];
-  _months = rows.slice(1)
-    .filter(r => r[0] && r[1] && r[2])
-    .map(r => ({ year: Number(r[0]), month: Number(r[1]), spreadsheetId: String(r[2]) }))
-    .sort((a, b) => (a.year * 12 + a.month) - (b.year * 12 + b.month));
-  _monthsAt = now;
-  return _months;
-}
-
-/** その年月のスプレッドシートID。未登録なら投げる。 */
-export async function resolveSpreadsheetId(year: number, month: number): Promise<string> {
-  const months = await listSheetMonths();
-  const entry = months.find(m => m.year === year && m.month === month);
-  if (!entry) throw new Error(`${year}年${month}月のスプレッドシートが未登録です`);
-  return entry.spreadsheetId;
-}
-
 // ── A1 記法ヘルパー ──────────────────────────────────────────────────
 
 function colLetter(c: number): string {
@@ -110,38 +94,27 @@ function rangeStr(sheet: string, cell: string): string {
 }
 
 // ── 読み取り（短時間キャッシュ・書き込みで無効化） ───────────────────
-// Sheets API の「1分あたりの読み取り回数（60回/ユーザー）」対策。
-const READ_TTL = 12000;
-const _readCache = new Map<string, { at: number; data: Record<string, any[][]> }>();
+// Sheets API の「1分あたりの読み取り回数」対策。自分の書き込みは即反映される。
+const READ_TTL = 8000;
+let _cache: { at: number; key: string; data: Record<string, any[][]> } | null = null;
 
-function readKey(sid: string, names: string[]): string {
-  return sid + '::' + [...names].sort().join('|');
-}
+function invalidate(): void { _cache = null; }
 
-function invalidateReadCache(sid: string): void {
-  for (const k of [..._readCache.keys()]) {
-    if (k.startsWith(sid + '::')) _readCache.delete(k);
-  }
-}
-
-function cloneData(d: Record<string, any[][]>): Record<string, any[][]> {
+function clone(d: Record<string, any[][]>): Record<string, any[][]> {
   const out: Record<string, any[][]> = {};
   for (const k of Object.keys(d)) out[k] = d[k].map(r => [...r]);
   return out;
 }
 
 /** 指定シート群を AOA（配列の配列）で取得。末尾空セルを最大列幅まで '' でパディング。 */
-export async function readSheets(
-  sheetNames: string[],
-  spreadsheetId: string,
-): Promise<Record<string, any[][]>> {
-  const key = readKey(spreadsheetId, sheetNames);
-  const cached = _readCache.get(key);
-  if (cached && Date.now() - cached.at < READ_TTL) return cloneData(cached.data);
+export async function readSheets(sheetNames: string[]): Promise<Record<string, any[][]>> {
+  const sid = assertConfigured();
+  const key = [...sheetNames].sort().join('|');
+  if (_cache && _cache.key === key && Date.now() - _cache.at < READ_TTL) return clone(_cache.data);
 
   const sh = await getSheetsClient();
   const res = await withRetry(() => sh.spreadsheets.values.batchGet({
-    spreadsheetId,
+    spreadsheetId: sid,
     ranges: sheetNames.map(n => `'${n}'`),
     valueRenderOption: 'UNFORMATTED_VALUE',
   }));
@@ -155,7 +128,7 @@ export async function readSheets(
       return rr;
     });
   });
-  _readCache.set(key, { at: Date.now(), data: cloneData(out) });
+  _cache = { at: Date.now(), key, data: clone(out) };
   return out;
 }
 
@@ -165,16 +138,13 @@ export interface CellWrite { sheet: string; row: number; col: number; value: any
 export interface CellClear { sheet: string; row: number; col: number; }
 
 /** 複数セルの書き込み/クリアをまとめて送信（row/col は0始まり）。 */
-export async function batchWrite(
-  writes: CellWrite[],
-  clears: CellClear[],
-  spreadsheetId: string,
-): Promise<void> {
+export async function batchWrite(writes: CellWrite[], clears: CellClear[] = []): Promise<void> {
+  const sid = assertConfigured();
   const sh = await getSheetsClient();
 
   if (writes.length > 0) {
     await withRetry(() => sh.spreadsheets.values.batchUpdate({
-      spreadsheetId,
+      spreadsheetId: sid,
       requestBody: {
         valueInputOption: 'RAW',
         data: writes.map(w => ({ range: rangeStr(w.sheet, cellA1(w.row, w.col)), values: [[w.value]] })),
@@ -184,51 +154,23 @@ export async function batchWrite(
 
   if (clears.length > 0) {
     await withRetry(() => sh.spreadsheets.values.batchClear({
-      spreadsheetId,
+      spreadsheetId: sid,
       requestBody: { ranges: clears.map(c => rangeStr(c.sheet, cellA1(c.row, c.col))) },
     }));
   }
-  invalidateReadCache(spreadsheetId);
+  invalidate();
 }
 
 /** シート全体を AOA で上書き（行の削除に使う。clear→update の順で古い行を残さない）。 */
-export async function writeSheetAoa(
-  sheetName: string,
-  aoa: any[][],
-  spreadsheetId: string,
-): Promise<void> {
+export async function writeSheetAoa(sheetName: string, aoa: any[][]): Promise<void> {
+  const sid = assertConfigured();
   const sh = await getSheetsClient();
-  await withRetry(() => sh.spreadsheets.values.clear({
-    spreadsheetId, range: `'${sheetName}'`,
-  }));
+  await withRetry(() => sh.spreadsheets.values.clear({ spreadsheetId: sid, range: `'${sheetName}'` }));
   await withRetry(() => sh.spreadsheets.values.update({
-    spreadsheetId,
+    spreadsheetId: sid,
     range: `'${sheetName}'!A1`,
     valueInputOption: 'RAW',
     requestBody: { values: aoa.map((r: any[]) => r.map((c: any) => c ?? '')) },
   }));
-  invalidateReadCache(spreadsheetId);
-}
-
-/** シートが無ければ作成してヘッダー行を書く。 */
-export async function ensureSheetExists(
-  sheetName: string, header: any[], spreadsheetId: string,
-): Promise<void> {
-  const sh = await getSheetsClient();
-  const meta = await withRetry(() => sh.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties.title' }));
-  const names = (meta.data.sheets ?? []).map((s: any) => s.properties?.title ?? '');
-  if (names.includes(sheetName)) return;
-  await withRetry(() => sh.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: { requests: [{ addSheet: { properties: { title: sheetName } } }] },
-  }));
-  if (header.length) {
-    await withRetry(() => sh.spreadsheets.values.update({
-      spreadsheetId,
-      range: `'${sheetName}'!A1`,
-      valueInputOption: 'RAW',
-      requestBody: { values: [header] },
-    }));
-  }
-  invalidateReadCache(spreadsheetId);
+  invalidate();
 }
