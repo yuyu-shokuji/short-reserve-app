@@ -852,11 +852,15 @@ export default function ReserveLedger({ year, month, people }: Props) {
         .rv-grab { cursor: grab; }
         .rv-grab:active { cursor: grabbing; }
         /* 入所時間（初日の名前の上）・退所時間（最終日の名前の下）。家族送迎は FA 付き。 */
-        .rv-time { font-size: 8px; line-height: 1.1; letter-spacing: -.04em; color: #475569; font-weight: 400; }
+        /* 時刻は8pxだと年配の職員に読みにくいので12pxにしてある（1.5倍・2026-09-22 現場の声）。
+           マスは幅54px・高さ18pxなので、"FA 09:00" でもこの大きさまでなら収まる。 */
+        .rv-time { font-size: 12px; line-height: 1; letter-spacing: -.04em; color: #475569; font-weight: 400; }
+        /* 名前と同じマスに並べるときだけは、名前がつぶれないよう少し小さくする */
+        .rv-both .rv-time { font-size: 10px; }
         /* 時刻はそれぞれの塊のほうへ寄せる。入所は右下（これから始まる塊は右下へ伸びる）、
            退所は左上（終わる塊は左上から来ている）。どちらの塊の時刻か迷わなくなる。
            ⚠️ マス側の字と行間も詰めること。行ボックスがマスいっぱいのままだと縦の寄せが効かない。 */
-        .rv-table td.rv-tin, .rv-table td.rv-tout { font-size: 8px; line-height: 1; }
+        .rv-table td.rv-tin, .rv-table td.rv-tout { font-size: 12px; line-height: 1; }
         .rv-table td.rv-tin  { text-align: right; vertical-align: bottom; padding: 0 1px 1px 0; }
         .rv-table td.rv-tout { text-align: left;  vertical-align: top;    padding: 1px 0 0 1px; }
         /* 氏名は苗字と名前で2段。1段あたりが短くなるぶん文字を大きくできる。
@@ -1402,7 +1406,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
                                     }
                                     if (timeHere) {
                                       // 名前と時刻を1マスに並べる。時刻のぶん名前を小さくして収める。
-                                      const fs = Math.max(7, Math.min(11, Math.floor((dayW - 20) / Math.max(1, nm.length))));
+                                      const fs = Math.max(7, Math.min(11, Math.floor((dayW - 30) / Math.max(1, nm.length))));
                                       return (
                                         <span className="rv-both">
                                           <span className="rv-name" style={{ fontSize: fs }}>{nm}</span>
