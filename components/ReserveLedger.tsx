@@ -59,6 +59,12 @@ const PRINT_W = 1542, PRINT_H = 1077;
 const WD = ['日', '月', '火', '水', '木', '金', '土'];
 const pad2 = (n: number) => String(n).padStart(2, '0');
 const isoOf = (y: number, m: number, d: number) => `${y}-${pad2(m)}-${pad2(d)}`;
+/** iso日付の n 日後 */
+const isoPlus = (iso: string, n: number) => {
+  const [y, m, d] = iso.split('-').map(Number);
+  const x = new Date(y, m - 1, d + n);
+  return isoOf(x.getFullYear(), x.getMonth() + 1, x.getDate());
+};
 // 食事管理アプリのショート全体一覧に合わせた列幅と食事行
 const OV_W = { bld: 26, room: 34, meal: 22 };
 const DAY_MIN = 54;   // 日付列の最小幅(px)。これより狭くはせず横スクロールにする（食事管理アプリと同じ）
@@ -751,6 +757,55 @@ export default function ReserveLedger({ year, month, people }: Props) {
 
   // 紙は A3横1枚。部屋数ぶんの高さははみ出しがちなので、その分だけ全体を縮める。
   // 横は縮めたあとにちょうど紙幅になるよう、先に広げた幅を入れておく。
+  /**
+   * 入浴・洗濯管理表（1週間ぶんの xlsx）。
+   * 日曜はじまりなので、その月にかかる日曜を並べて選ばせる。
+   */
+  const sundays = useMemo(() => {
+    const out: { start: string; label: string }[] = [];
+    const d = new Date(year, month - 1, 1);
+    d.setDate(d.getDate() - d.getDay());                 // 1日を含む週の日曜まで戻す
+    const last = new Date(year, month - 1, daysInMonth);
+    while (d <= last) {
+      const e = new Date(d); e.setDate(e.getDate() + 6);
+      out.push({
+        start: isoOf(d.getFullYear(), d.getMonth() + 1, d.getDate()),
+        label: `${d.getMonth() + 1}/${d.getDate()}〜${e.getMonth() + 1}/${e.getDate()}`,
+      });
+      d.setDate(d.getDate() + 7);
+    }
+    return out;
+  }, [year, month, daysInMonth]);
+
+  const [bathWeek, setBathWeek] = useState('');
+  useEffect(() => {
+    // 今日を含む週があればそれ、無ければその月の最初の週
+    const t = todayISO();
+    const hit = sundays.find(s => t >= s.start && t <= isoPlus(s.start, 6));
+    setBathWeek(hit?.start ?? sundays[0]?.start ?? '');
+  }, [sundays]);
+
+  const downloadBathSheet = async () => {
+    if (!bathWeek) return;
+    setBusy(true); setError('');
+    try {
+      const res = await fetch(`/api/bath-sheet?week=${bathWeek}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || '作成に失敗しました');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `入浴管理表_${bathWeek}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setMsg(`入浴管理表（${bathWeek} の週）を作りました。${res.headers.get('X-Row-Count') ?? ''}件`);
+    } catch (e: any) {
+      setError(e.message || '入浴管理表の作成に失敗しました');
+    } finally { setBusy(false); }
+  };
+
   const printChart = printWhat === 'chart';
   const printBody = PRINT_H - 44;   // 見出し1行ぶんを空けておく
   const printZoom = chartH > printBody ? Math.max(0.5, Math.floor((printBody / chartH) * 100) / 100) : 1;
@@ -952,6 +1007,19 @@ export default function ReserveLedger({ year, month, people }: Props) {
         </button>
         <button onClick={() => doPrint('chart')} className="bg-sky-500 text-white rounded-lg px-3 py-2 text-sm font-semibold hover:bg-sky-600">🖨 台帳を印刷（A3横）</button>
         <button onClick={() => doPrint('list')} className="bg-sky-100 text-sky-800 rounded-lg px-3 py-2 text-sm font-semibold hover:bg-sky-200">🖨 一覧を印刷（A4縦）</button>
+        {/* 入浴・洗濯管理表。日曜はじまりの1週間ぶんを Excel で落とす。 */}
+        <span className="inline-flex items-center gap-1 rounded-lg bg-teal-50 border border-teal-200 px-2 py-1"
+          title="選んだ週の入浴・洗濯管理表を Excel で作ります。">
+          <span className="text-xs font-semibold text-teal-800">🛁 入浴表</span>
+          <select value={bathWeek} onChange={e => setBathWeek(e.target.value)}
+            className="border border-teal-300 rounded px-1 py-1 text-xs bg-white">
+            {sundays.map(s => <option key={s.start} value={s.start}>{s.label}</option>)}
+          </select>
+          <button disabled={busy || !bathWeek} onClick={downloadBathSheet}
+            className="bg-teal-600 text-white rounded px-2.5 py-1 text-xs font-bold hover:bg-teal-700 disabled:opacity-40">
+            Excelを作る
+          </button>
+        </span>
         <button onClick={() => load()} className="bg-gray-200 text-gray-700 rounded-lg px-3 py-2 text-sm font-semibold">🔄 更新</button>
       </div>
 
