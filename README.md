@@ -93,3 +93,8 @@ git push -u origin master
 | `fill-default-times.mjs` | 入退所時刻が空の行に既定値（09:00 / 16:00）を入れる |
 | `split-soutai.mjs` | 送迎を入所・退所の2列に分ける（2026-09-22に実行済み） |
 | `check-names.mjs` | 食事管理アプリ側と氏名の表記がそろっているか調べる（読むだけ） |
+| `clone-to.mjs` | 中身を別のスプレッドシートへ丸ごと写す（練習用ファイルを作るとき。`--to=<ID>`） |
+
+⚠️ **サービスアカウントはスプレッドシートを新規作成できない**（Driveの容量を持っていないため）。
+新しいファイルが要るときは、人がドライブで作って
+`meal-bot@yuyu-meal.iam.gserviceaccount.com` に「編集者」で共有する。
