@@ -273,13 +273,21 @@ export default function ReserveLedger({ year, month, people }: Props) {
    * 在室していても名前は出さない（枠もそのぶん欠ける）。
    * time   = そのマスに出す入退所時刻。名前が入らないマスにだけ置く。
    */
-  interface MealCell { eaters: Reservation[]; time?: string; timeOf?: Reservation; }
+  interface MealCell {
+    eaters: Reservation[];
+    time?: string; timeOf?: Reservation;
+    /**
+     * 氏名を出すマス。塊ごとに1つだけ決めて、そこにまとめて大きく出す。
+     * offCells は塊の中心とこのマスの中心のずれ（マス数）。偶数日数の塊で半マスずれるぶんを補正する。
+     */
+    label?: { rv: Reservation; runLen: number; offCells: number };
+  }
   const mealGrid = useMemo(() => {
     const map = new Map<string, MealCell[][]>();
     for (const r of rooms) {
       const key = `${r.building}-${r.room}`;
       const cells = grid.get(key) ?? [];
-      map.set(key, Array.from({ length: daysInMonth }, (_, i) => {
+      const days: MealCell[][] = Array.from({ length: daysInMonth }, (_, i) => {
         const iso = isoOf(year, month, i + 1);
         const list = cells[i] ?? [];
         const out: MealCell[] = MEAL_KEYS.map(mk => ({ eaters: list.filter(rv => mealsFor(rv, iso)[mk]) }));
@@ -303,7 +311,39 @@ export default function ReserveLedger({ year, month, people }: Props) {
           }
         }
         return out;
-      }));
+      });
+
+      // 氏名は塊に1回だけ。行ごとに連続している範囲を拾い、
+      // 昼 → 夕 → 朝 の順でいちばん長い行を選んで、その真ん中のマスに出す。
+      // 名前の繰り返しが消えるぶん、文字を大きくできる。
+      const runs = new Map<string, { rv: Reservation; row: number; s: number; e: number }[]>();
+      for (let mi = 0; mi < MEAL_KEYS.length; mi++) {
+        let i = 0;
+        while (i < daysInMonth) {
+          const rv = days[i][mi].eaters[0];
+          if (!rv) { i++; continue; }
+          let j = i;
+          while (j + 1 < daysInMonth && days[j + 1][mi].eaters[0]?.id === rv.id) j++;
+          if (!runs.has(rv.id)) runs.set(rv.id, []);
+          runs.get(rv.id)!.push({ rv, row: mi, s: i, e: j });
+          i = j + 1;
+        }
+      }
+      for (const list of runs.values()) {
+        let best: { rv: Reservation; row: number; s: number; e: number } | undefined;
+        for (const pref of [1, 2, 0]) {                         // 昼・夕・朝
+          const cand = list.filter(x => x.row === pref).sort((a, b) => (b.e - b.s) - (a.e - a.s))[0];
+          if (cand) { best = cand; break; }
+        }
+        if (!best) continue;
+        const mid = Math.floor((best.s + best.e) / 2);
+        days[mid][best.row].label = {
+          rv: best.rv, runLen: best.e - best.s + 1,
+          offCells: (best.s + best.e) / 2 - mid,
+        };
+      }
+
+      map.set(key, days);
     }
     return map;
   }, [grid, rooms, daysInMonth, year, month]);
@@ -680,6 +720,14 @@ export default function ReserveLedger({ year, month, people }: Props) {
            ＝日によって行がガタつかず、横に目で追える。はみ出しは td の overflow:hidden で切る。 */
         /* 1部屋＝朝昼夕の3行。1行は氏名1行ぶんの高さでそろえる。 */
         .rv-table tbody tr.rv-mealrow td, .rv-table tbody tr.rv-mealrow th { height: 18px; }
+        /* 氏名は塊に1回だけ。そのマスだけ枠外へはみ出させ、塊の幅で中央に置く。
+           はみ出す先は同じ塊の（名前を出さない）マスなので、隣の予約を隠さない。 */
+        .rv-table td.rv-haslabel { overflow: visible; position: relative; z-index: 3; }
+        .rv-blockname {
+          position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+          white-space: nowrap; overflow: hidden; text-align: center; line-height: 1;
+          pointer-events: none;   /* クリックやホバーは下のマスに通す */
+        }
       `}</style>
 
       <div className="rv-noprint flex items-center gap-3 flex-wrap">
@@ -1080,12 +1128,20 @@ export default function ReserveLedger({ year, month, people }: Props) {
                                   onDrop={e => onDrop(e, b.name, rm.room, i)}
                                   onClick={() => shown ? openEdit(shown) : timeRv ? openEdit(timeRv) : openNew(b.name, rm.room, iso)}
                                   className={`px-0 py-0 cursor-pointer hover:outline hover:outline-2 hover:outline-sky-400 ${
+                                    cell.label ? 'rv-haslabel ' : ''}${
                                     shown ? 'rv-grab ' : ''}${isSource ? 'opacity-40 ' : ''}${dnd}${warn}${blk}${base}`}>
-                                  {timeHere
-                                    ? <span className="rv-time">{timeHere}</span>
-                                    : shown
-                                      ? <span className="rv-name" style={{ fontSize: fontPxFor(shown.name, dayW) }}>{tightName(shown.name)}</span>
-                                      : '・'}
+                                  {cell.label ? (() => {
+                                    // 塊の幅いっぱいを使って中央に1回だけ出す（はみ出しは塊の幅で止まる）
+                                    const w = Math.max(dayW, cell.label.runLen * dayW - 4);
+                                    const nm = tightName(cell.label.rv.name);
+                                    const fs = Math.max(9, Math.min(14, Math.floor(w / Math.max(1, nm.length))));
+                                    const dx = cell.label.offCells * dayW;
+                                    return <span className="rv-name rv-blockname"
+                                      style={{ width: w, fontSize: fs, transform: `translate(calc(-50% + ${dx}px), -50%)` }}>{nm}</span>;
+                                  })()
+                                    : timeHere ? <span className="rv-time">{timeHere}</span>
+                                    : shown ? ''
+                                    : '・'}
                                 </td>
                               );
                             })}
