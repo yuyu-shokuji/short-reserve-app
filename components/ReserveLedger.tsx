@@ -294,6 +294,8 @@ export default function ReserveLedger({ year, month, people }: Props) {
   interface MealCell {
     eaters: Reservation[];
     time?: string; timeOf?: Reservation;
+    /** 空きマスが無くて、名前と同じマスに時刻を並べる場合（夕食まで食べて退所するときなど） */
+    timeWithName?: boolean;
     /**
      * 氏名を出すマス。塊ごとに1つだけ決めて、そこにまとめて大きく出す。
      * offCells は塊の中心とこのマスの中心のずれ（マス数）。偶数日数の塊で半マスずれるぶんを補正する。
@@ -312,20 +314,26 @@ export default function ReserveLedger({ year, month, people }: Props) {
 
         // 入所時刻は最初の食事の1つ上の行、退所時刻は最後の食事の1つ下の行に置く。
         // ちょうど食事が無くて空いている行なので、名前とぶつからない。
+        // 空きマスがあればそこへ。無ければ（例：夕食まで食べて退所する日）
+        // 端の食事マスに名前と並べて出す。出し損ねると時刻がどこにも出なくなるため。
+        const putTime = (rv: Reservation, text: string, prefer: number, fallback: number) => {
+          if (prefer >= 0 && prefer < MEAL_KEYS.length && !out[prefer].eaters.length && !out[prefer].time) {
+            out[prefer].time = text; out[prefer].timeOf = rv; return;
+          }
+          if (fallback >= 0 && fallback < MEAL_KEYS.length && !out[fallback].time) {
+            out[fallback].time = text; out[fallback].timeOf = rv; out[fallback].timeWithName = true;
+          }
+        };
         for (const rv of list) {
           const m = mealsFor(rv, iso);
           const eaten = MEAL_KEYS.map((k, mi) => (m[k] ? mi : -1)).filter(x => x >= 0);
           if (iso === rv.start && rv.inTime) {
-            const at = eaten.length ? eaten[0] - 1 : MEAL_KEYS.length - 1;
-            if (at >= 0 && !out[at].eaters.length && !out[at].time) {
-              out[at].time = timeLabel(rv, rv.inTime); out[at].timeOf = rv;
-            }
+            const first = eaten.length ? eaten[0] : MEAL_KEYS.length - 1;
+            putTime(rv, timeLabel(rv, rv.inTime), first - 1, first);
           }
           if (iso === rv.end && rv.outTime) {
-            const at = eaten.length ? eaten[eaten.length - 1] + 1 : 0;
-            if (at < MEAL_KEYS.length && !out[at].eaters.length && !out[at].time) {
-              out[at].time = timeLabel(rv, rv.outTime); out[at].timeOf = rv;
-            }
+            const last = eaten.length ? eaten[eaten.length - 1] : 0;
+            putTime(rv, timeLabel(rv, rv.outTime), last + 1, last);
           }
         }
         return out;
@@ -741,6 +749,8 @@ export default function ReserveLedger({ year, month, people }: Props) {
         /* 氏名は塊に1回だけ。そのマスだけ枠外へはみ出させ、塊の幅で中央に置く。
            はみ出す先は同じ塊の（名前を出さない）マスなので、隣の予約を隠さない。 */
         .rv-table td.rv-haslabel { overflow: visible; position: relative; z-index: 3; }
+        /* 名前と時刻を1マスに並べるとき（夕食まで食べて退所する日など） */
+        .rv-both { display: flex; align-items: center; justify-content: center; gap: 2px; width: 100%; }
         .rv-blockname {
           position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
           white-space: nowrap; overflow: hidden; text-align: center; line-height: 1;
@@ -1099,8 +1109,9 @@ export default function ReserveLedger({ year, month, people }: Props) {
                               const eater = cell.eaters[0];
                               // 名前が出るのは食事のあるマスだけ。食事の無いマスは空＝次の人を入れられる。
                               const shown = eater;
-                              // そのマスに名前が無いとき、入退所時刻だけ小さく出す（誰がいつ出入りするかの手がかり）
-                              const timeHere = !eater ? (cell.time ?? '') : '';
+                              // 入退所時刻。ふだんは食事の無い空きマスに出すが、
+                              // 空きが無いとき（夕食まで食べて退所する日など）は名前と並べて出す。
+                              const timeHere = (!eater || cell.timeWithName) ? (cell.time ?? '') : '';
                               const timeRv = !eater ? cell.timeOf : undefined;
 
                               const dupMeal = cell.eaters.length > 1;  // 同じ部屋の同じ食事に2人＝二重予約
@@ -1160,21 +1171,35 @@ export default function ReserveLedger({ year, month, people }: Props) {
                                   className={`px-0 py-0 cursor-pointer hover:outline hover:outline-2 hover:outline-sky-400 ${
                                     cell.label && nameMode === 'once' ? 'rv-haslabel ' : ''}${
                                     shown ? 'rv-grab ' : ''}${isSource ? 'opacity-40 ' : ''}${dnd}${warn}${blk}${base}`}>
-                                  {timeHere ? <span className="rv-time">{timeHere}</span>
-                                    : !shown ? '・'
-                                    : nameMode === 'every'
-                                      // 毎日出す（従来）
-                                      ? <span className="rv-name" style={{ fontSize: fontPxFor(shown.name, dayW) }}>{tightName(shown.name)}</span>
-                                      // 塊に1回だけ。塊の幅いっぱいを使って中央に出す（はみ出しは塊の幅で止まる）
-                                      : cell.label ? (() => {
-                                          const w = Math.max(dayW, cell.label.runLen * dayW - 4);
-                                          const nm = tightName(cell.label.rv.name);
-                                          const fs = Math.max(9, Math.min(14, Math.floor(w / Math.max(1, nm.length))));
-                                          const dx = cell.label.offCells * dayW;
-                                          return <span className="rv-name rv-blockname"
-                                            style={{ width: w, fontSize: fs, transform: `translate(calc(-50% + ${dx}px), -50%)` }}>{nm}</span>;
-                                        })()
-                                      : ''}
+                                  {(() => {
+                                    // このマスに名前を出すか（毎日モードは常に／塊に1回モードは代表マスだけ）
+                                    const nameRv = shown && (nameMode === 'every' ? shown : cell.label?.rv) || null;
+                                    const nm = nameRv ? tightName(nameRv.name) : '';
+
+                                    if (!nm) {
+                                      if (timeHere) return <span className="rv-time">{timeHere}</span>;
+                                      return shown ? '' : '・';
+                                    }
+                                    if (timeHere) {
+                                      // 名前と時刻を1マスに並べる。時刻のぶん名前を小さくして収める。
+                                      const fs = Math.max(7, Math.min(11, Math.floor((dayW - 20) / Math.max(1, nm.length))));
+                                      return (
+                                        <span className="rv-both">
+                                          <span className="rv-name" style={{ fontSize: fs }}>{nm}</span>
+                                          <span className="rv-time">{timeHere}</span>
+                                        </span>
+                                      );
+                                    }
+                                    if (nameMode === 'once' && cell.label) {
+                                      // 塊の幅いっぱいを使って中央に出す（はみ出しは塊の幅で止まる）
+                                      const w = Math.max(dayW, cell.label.runLen * dayW - 4);
+                                      const fs = Math.max(9, Math.min(14, Math.floor(w / Math.max(1, nm.length))));
+                                      const dx = cell.label.offCells * dayW;
+                                      return <span className="rv-name rv-blockname"
+                                        style={{ width: w, fontSize: fs, transform: `translate(calc(-50% + ${dx}px), -50%)` }}>{nm}</span>;
+                                    }
+                                    return <span className="rv-name" style={{ fontSize: fontPxFor(nm, dayW) }}>{nm}</span>;
+                                  })()}
                                 </td>
                               );
                             })}
