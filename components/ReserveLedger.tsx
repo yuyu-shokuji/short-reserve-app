@@ -337,6 +337,8 @@ export default function ReserveLedger({ year, month, people }: Props) {
   interface MealCell {
     eaters: Reservation[];
     time?: string; timeOf?: Reservation;
+    /** 入所の時刻か退所の時刻か。マスの中で寄せる向きを変えて、どの塊のものか分かるようにする。 */
+    timeKind?: 'in' | 'out';
     /** 空きマスが無くて、名前と同じマスに時刻を並べる場合（夕食まで食べて退所するときなど） */
     timeWithName?: boolean;
     /**
@@ -359,12 +361,13 @@ export default function ReserveLedger({ year, month, people }: Props) {
         // ちょうど食事が無くて空いている行なので、名前とぶつからない。
         // 空きマスがあればそこへ。無ければ（例：夕食まで食べて退所する日）
         // 端の食事マスに名前と並べて出す。出し損ねると時刻がどこにも出なくなるため。
-        const putTime = (rv: Reservation, text: string, prefer: number, fallback: number) => {
+        const putTime = (rv: Reservation, text: string, prefer: number, fallback: number, kind: 'in' | 'out') => {
           if (prefer >= 0 && prefer < MEAL_KEYS.length && !out[prefer].eaters.length && !out[prefer].time) {
-            out[prefer].time = text; out[prefer].timeOf = rv; return;
+            out[prefer].time = text; out[prefer].timeOf = rv; out[prefer].timeKind = kind; return;
           }
           if (fallback >= 0 && fallback < MEAL_KEYS.length && !out[fallback].time) {
-            out[fallback].time = text; out[fallback].timeOf = rv; out[fallback].timeWithName = true;
+            out[fallback].time = text; out[fallback].timeOf = rv; out[fallback].timeKind = kind;
+            out[fallback].timeWithName = true;
           }
         };
         for (const rv of list) {
@@ -372,11 +375,11 @@ export default function ReserveLedger({ year, month, people }: Props) {
           const eaten = MEAL_KEYS.map((k, mi) => (m[k] ? mi : -1)).filter(x => x >= 0);
           if (iso === rv.start && rv.inTime) {
             const first = eaten.length ? eaten[0] : MEAL_KEYS.length - 1;
-            putTime(rv, timeLabel(rv.soutaiIn, rv.inTime), first - 1, first);
+            putTime(rv, timeLabel(rv.soutaiIn, rv.inTime), first - 1, first, 'in');
           }
           if (iso === rv.end && rv.outTime) {
             const last = eaten.length ? eaten[eaten.length - 1] : 0;
-            putTime(rv, timeLabel(rv.soutaiOut, rv.outTime), last + 1, last);
+            putTime(rv, timeLabel(rv.soutaiOut, rv.outTime), last + 1, last, 'out');
           }
         }
         return out;
@@ -843,6 +846,12 @@ export default function ReserveLedger({ year, month, people }: Props) {
         .rv-grab:active { cursor: grabbing; }
         /* 入所時間（初日の名前の上）・退所時間（最終日の名前の下）。家族送迎は FA 付き。 */
         .rv-time { font-size: 8px; line-height: 1.1; letter-spacing: -.04em; color: #475569; font-weight: 400; }
+        /* 時刻はそれぞれの塊のほうへ寄せる。入所は右下（これから始まる塊は右下へ伸びる）、
+           退所は左上（終わる塊は左上から来ている）。どちらの塊の時刻か迷わなくなる。
+           ⚠️ マス側の字と行間も詰めること。行ボックスがマスいっぱいのままだと縦の寄せが効かない。 */
+        .rv-table td.rv-tin, .rv-table td.rv-tout { font-size: 8px; line-height: 1; }
+        .rv-table td.rv-tin  { text-align: right; vertical-align: bottom; padding: 0 1px 1px 0; }
+        .rv-table td.rv-tout { text-align: left;  vertical-align: top;    padding: 1px 0 0 1px; }
         /* 氏名は苗字と名前で2段。1段あたりが短くなるぶん文字を大きくできる。
            書体はメイリオ指定（現場の見やすさ優先。無い環境では既定のゴシックに落ちる）。 */
         /* 書体は明朝。太字にしないほうが字面が静かで読みやすい（現場の指定）。 */
@@ -1268,6 +1277,9 @@ export default function ReserveLedger({ year, month, people }: Props) {
                               // 空きが無いとき（夕食まで食べて退所する日など）は名前と並べて出す。
                               const timeHere = (!eater || cell.timeWithName) ? (cell.time ?? '') : '';
                               const timeRv = !eater ? cell.timeOf : undefined;
+                              // 時刻だけのマスは塊のほうへ寄せる（名前と同居するマスは中央のまま）
+                              const timeAlign = timeHere && !eater
+                                ? (cell.timeKind === 'in' ? 'rv-tin ' : 'rv-tout ') : '';
 
                               const dupMeal = cell.eaters.length > 1;  // 同じ部屋の同じ食事に2人＝二重予約
                               const dupPerson = !!eater && doubleBooked.has(`${eater.name}|${iso}`);
@@ -1329,7 +1341,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
                                   onClick={() => shown ? openEdit(shown) : timeRv ? openEdit(timeRv) : openNew(b.name, rm.room, iso)}
                                   className={`px-0 py-0 cursor-pointer hover:outline hover:outline-2 hover:outline-sky-400 ${
                                     cell.label && nameMode === 'once' ? 'rv-haslabel ' : ''}${
-                                    shown ? 'rv-grab ' : ''}${isSource ? 'opacity-40 ' : ''}${dnd}${warn}${blk}${base}`}>
+                                    shown ? 'rv-grab ' : ''}${isSource ? 'opacity-40 ' : ''}${timeAlign}${dnd}${warn}${blk}${base}`}>
                                   {(() => {
                                     // このマスに名前を出すか（毎日モードは常に／塊に1回モードは代表マスだけ）
                                     const nameRv = shown && (nameMode === 'every' ? shown : cell.label?.rv) || null;
