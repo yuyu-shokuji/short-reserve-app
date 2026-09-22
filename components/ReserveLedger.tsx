@@ -404,21 +404,44 @@ export default function ReserveLedger({ year, month, people }: Props) {
       // 前半・後半に切って出すときは、画面（紙）に出ている範囲の真ん中に置く。
       // そうしないと、切れ目をまたぐ塊の氏名がもう一方の紙にだけ載って、片方が無名になる。
       const lo = dayFrom - 1, hi = dayTo - 1;
+      type Run = { rv: Reservation; row: number; s: number; e: number };
+      /** 上下に隣り合って重なっていれば、同じひとかたまり。斜めだけの接触はつながりと見ない。 */
+      const touches = (a: Run, b: Run) => Math.abs(a.row - b.row) === 1 && a.s <= b.e && b.s <= a.e;
       for (const list of runs.values()) {
-        const seen = list
+        const seen: Run[] = list
           .map(x => ({ ...x, s: Math.max(x.s, lo), e: Math.min(x.e, hi) }))
           .filter(x => x.s <= x.e);
-        let best: { rv: Reservation; row: number; s: number; e: number } | undefined;
-        for (const pref of [1, 2, 0]) {                         // 昼・夕・朝
-          const cand = seen.filter(x => x.row === pref).sort((a, b) => (b.e - b.s) - (a.e - a.s))[0];
-          if (cand) { best = cand; break; }
+
+        // 同じ予約でも、食事の無い時間帯で分断されて離れ小島になることがある。
+        // 例）1泊2日で16:00入所・09:00退所＝初日の夕と二日目の朝だけ。斜めに離れて枠が2つに割れ、
+        //     別の予約に見えてしまう。そこで「氏名は塊に1回」は、離れたかたまりごとに1回とする。
+        const groups: Run[][] = [];
+        const taken = new Array(seen.length).fill(false);
+        for (let i = 0; i < seen.length; i++) {
+          if (taken[i]) continue;
+          const g = [seen[i]];
+          taken[i] = true;
+          for (let k = 0; k < g.length; k++) {
+            for (let j = 0; j < seen.length; j++) {
+              if (!taken[j] && touches(g[k], seen[j])) { taken[j] = true; g.push(seen[j]); }
+            }
+          }
+          groups.push(g);
         }
-        if (!best) continue;
-        const mid = Math.floor((best.s + best.e) / 2);
-        days[mid][best.row].label = {
-          rv: best.rv, runLen: best.e - best.s + 1,
-          offCells: (best.s + best.e) / 2 - mid,
-        };
+
+        for (const g of groups) {
+          let best: Run | undefined;
+          for (const pref of [1, 2, 0]) {                       // 昼・夕・朝
+            const cand = g.filter(x => x.row === pref).sort((a, b) => (b.e - b.s) - (a.e - a.s))[0];
+            if (cand) { best = cand; break; }
+          }
+          if (!best) continue;
+          const mid = Math.floor((best.s + best.e) / 2);
+          days[mid][best.row].label = {
+            rv: best.rv, runLen: best.e - best.s + 1,
+            offCells: (best.s + best.e) / 2 - mid,
+          };
+        }
       }
 
       map.set(key, days);
