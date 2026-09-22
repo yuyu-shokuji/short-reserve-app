@@ -10,8 +10,9 @@
 //  ・すでに入っている逆ダブルブッキングは表の中で赤く出す
 //  ・期間の変更は ±1日ボタンでも（延長・短縮が多いため）
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Person } from './ReserveApp';
+import { mealsFor, MEAL_KEYS, type MealKey } from '@/lib/meal-rule';
 
 type SoutaiKind = '' | '送迎あり' | '家族送迎';
 
@@ -42,33 +43,27 @@ interface Vacancy {
 const WD = ['日', '月', '火', '水', '木', '金', '土'];
 const pad2 = (n: number) => String(n).padStart(2, '0');
 const isoOf = (y: number, m: number, d: number) => `${y}-${pad2(m)}-${pad2(d)}`;
-const DAY_W = 34;   // 日付列の幅(px)。狭い画面では横スクロール
+// 食事管理アプリのショート全体一覧に合わせた列幅と食事行
+const OV_W = { bld: 26, room: 34, meal: 22 };
+const DAY_MIN = 54;   // 日付列の最小幅(px)。これより狭くはせず横スクロールにする（食事管理アプリと同じ）
+const MEAL_ROWS: { key: MealKey; label: string; tint: string }[] = [
+  { key: 'asa',  label: '朝', tint: 'bg-amber-50' },
+  { key: 'hiru', label: '昼', tint: 'bg-sky-50' },
+  { key: 'yu',   label: '夕', tint: 'bg-indigo-50' },
+];
 
 const dowOf = (y: number, m: number, d: number) => WD[new Date(y, m - 1, d).getDay()];
 const dowColor = (w: string) => (w === '日' ? 'text-red-500' : w === '土' ? 'text-blue-500' : 'text-gray-500');
 const dowBg = (w: string) => (w === '日' ? 'bg-red-50' : w === '土' ? 'bg-blue-50' : '');
 
-/** 「曽我　伸子」→ ['曽我','伸子']。区切りが無ければ1段のまま。 */
-function splitName(s: string): [string, string] {
-  const parts = String(s ?? '').trim().split(/[\s　]+/).filter(Boolean);
-  if (parts.length >= 2) return [parts[0], parts.slice(1).join('')];
-  return [String(s ?? '').trim(), ''];
-}
-
 /**
- * 列幅に収まる文字サイズ。苗字と名前を2段に分けたので、長いほうの段で決める。
- * 1段だったころより1段あたりの文字数が減るぶん、文字を大きくできる。
+ * 列幅に収まる文字サイズ。1部屋3行（朝昼夕）にしたので氏名は1行で出す。
+ * 食事管理アプリの全体一覧と同じ考え方＝列幅 ÷ 文字数。
+ * 画面が広いほど列が広がり、自動的に文字も大きくなる。
  */
-function fontPxFor(s: string): number {
-  const [a, b] = splitName(s);
-  const n = Math.max(1, a.length, b.length);
-  return Math.max(7, Math.min(13, Math.floor(DAY_W / n)));
-}
-
-/** 入れ替わりの日は上下2段に詰めるので、氏名は1行。幅に収まるよう小さめにする。 */
-function swapFontPxFor(s: string): number {
-  const n = Math.max(1, String(s ?? '').replace(/[\s　]+/g, '').length);
-  return Math.max(5, Math.min(9, Math.floor((DAY_W - 2) / n)));
+function fontPxFor(s: string, dayW: number): number {
+  const n = Math.max(1, String(s ?? '').length);
+  return Math.max(6, Math.min(12, Math.floor(dayW / n)));
 }
 
 const todayISO = () => {
@@ -163,6 +158,15 @@ export default function ReserveLedger({ year, month, people }: Props) {
   // 削除ログ（消した予約の履歴）。開いたときだけ読む。
   const [trashOpen, setTrashOpen] = useState(false);
   const [trash, setTrash] = useState<TrashEntry[] | null>(null);
+  // 表を置ける幅（列幅を画面いっぱいに広げるため。食事管理アプリの全体一覧と同じ）
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [availW, setAvailW] = useState(0);
+  useEffect(() => {
+    const measure = () => { if (bodyRef.current) setAvailW(bodyRef.current.clientWidth); };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  });
 
   const load = useCallback(async (silent = false) => {
     if (!silent) { setLoading(true); setError(''); }
@@ -209,6 +213,36 @@ export default function ReserveLedger({ year, month, people }: Props) {
     }
     return map;
   }, [rows, rooms, daysInMonth, year, month]);
+
+  /**
+   * 部屋×日付×食事のマス目。
+   * eaters = その食事を食べる人（入退所の時刻から lib/meal-rule.ts が決める）。
+   * stay   = 在室しているがその食事はない人（食事管理アプリと同じく薄字で出す）。
+   */
+  interface MealCell { eaters: Reservation[]; stay?: Reservation; }
+  const mealGrid = useMemo(() => {
+    const map = new Map<string, MealCell[][]>();
+    for (const r of rooms) {
+      const key = `${r.building}-${r.room}`;
+      const cells = grid.get(key) ?? [];
+      map.set(key, Array.from({ length: daysInMonth }, (_, i) => {
+        const iso = isoOf(year, month, i + 1);
+        const list = cells[i] ?? [];
+        return MEAL_KEYS.map(mk => {
+          const eaters = list.filter(rv => mealsFor(rv, iso)[mk]);
+          const stay = eaters.length ? undefined : list[0];
+          return { eaters, stay };
+        });
+      }));
+    }
+    return map;
+  }, [grid, rooms, daysInMonth, year, month]);
+
+  /** そのマスに出ている人（食べる人 → いなければ在室だけの人）。塊の枠を描くのに使う。 */
+  const occAt = useCallback((roomKey: string, dayIdx: number, mealIdx: number): Reservation | undefined => {
+    const c = mealGrid.get(roomKey)?.[dayIdx]?.[mealIdx];
+    return c?.eaters[0] ?? c?.stay;
+  }, [mealGrid]);
 
   // 逆ダブルブッキング：同じ人が同じ日に2部屋以上に入っているマス
   const doubleBooked = useMemo(() => {
@@ -286,7 +320,8 @@ export default function ReserveLedger({ year, month, people }: Props) {
   const openNew = (building: string, room: number, iso: string) => {
     setForm({
       id: '', name: '', building, room, start: iso, end: iso,
-      status: '仮予約', soutai: '', inTime: '', outTime: '', note: '',
+      // 時刻の既定値。空にすると時刻欄が「いまの時刻」から始まって使いにくいため。
+      status: '仮予約', soutai: '', inTime: '09:00', outTime: '16:00', note: '',
     });
     setConflicts(null); setMsg('');
   };
@@ -467,6 +502,10 @@ export default function ReserveLedger({ year, month, people }: Props) {
   const formNights = form ? nightsOf(form.start, form.end) : 0;
   const freeList = vacancy?.vacancies.filter(v => v.free) ?? [];
 
+  // 日付列の幅＝画面の空き幅を日数で割って広げる（狭い画面では DAY_MIN で横スクロール）
+  const fixedW = OV_W.bld + OV_W.room + OV_W.meal;
+  const dayW = Math.max(DAY_MIN, Math.floor(((availW || 0) - fixedW) / daysInMonth) || 0);
+
   /**
    * 下の一覧はあいうえお順（利用者シートのふりがな）。
    * ふりがなが無い人は末尾にまわし、そのなかは氏名の読み順。
@@ -506,12 +545,16 @@ export default function ReserveLedger({ year, month, people }: Props) {
           white-space: nowrap; text-align: center; overflow: hidden;
         }
         .rv-table tbody tr.rv-bldend td, .rv-table tbody tr.rv-bldend th { border-bottom: 3px solid #94a3b8; }
+        /* 部屋の区切り（朝昼夕の3行が1部屋） */
+        .rv-table tbody tr.rv-roomend td, .rv-table tbody tr.rv-roomend th { border-bottom: 2px solid #cbd5e1; }
         /* 予約の塊を枠で囲う。border-collapse と喧嘩しないよう内側の影で描く。
-           月をまたぐ滞在は、月の端では縦線を引かない（続いていることが分かるように）。 */
-        .rv-blk   { box-shadow: inset 0 2px 0 #1e293b, inset 0 -2px 0 #1e293b; }
-        .rv-blk-s { box-shadow: inset 0 2px 0 #1e293b, inset 0 -2px 0 #1e293b, inset 2px 0 0 #1e293b; }
-        .rv-blk-e { box-shadow: inset 0 2px 0 #1e293b, inset 0 -2px 0 #1e293b, inset -2px 0 0 #1e293b; }
-        .rv-blk-se{ box-shadow: inset 0 2px 0 #1e293b, inset 0 -2px 0 #1e293b, inset 2px 0 0 #1e293b, inset -2px 0 0 #1e293b; }
+           隣のマスと同じ人かどうかで辺を出し分けるので、月またぎや同日交代も自然に囲える。 */
+        .rv-t { --bt: inset 0 2px 0 #1e293b; }
+        .rv-b { --bb: inset 0 -2px 0 #1e293b; }
+        .rv-l { --bl: inset 2px 0 0 #1e293b; }
+        .rv-r { --br: inset -2px 0 0 #1e293b; }
+        .rv-table td { --bt: 0 0 #0000; --bb: 0 0 #0000; --bl: 0 0 #0000; --br: 0 0 #0000;
+          box-shadow: var(--bt), var(--bb), var(--bl), var(--br); }
         /* 左に固定する2列。背景色は各セルのクラスに任せる（ここで白を敷くと棟の色が消える）。 */
         .rv-fix { position: sticky; }
         .rv-table thead .rv-fix { z-index: 25; }
@@ -532,16 +575,12 @@ export default function ReserveLedger({ year, month, people }: Props) {
         }
         /* 行の高さを全部そろえる。いちばん背の高い「入所時間＋氏名2段＋退所時間」に合わせる
            ＝日によって行がガタつかず、横に目で追える。はみ出しは td の overflow:hidden で切る。 */
-        .rv-table tbody tr.rv-roomrow td, .rv-table tbody tr.rv-roomrow th { height: 56px; }
-        /* 入れ替わりの日：1マスを上下に割って、上＝出る人・下＝入る人。
-           10:00に退所して11:00に次の人が入る、という使い方がふつうにあるため。 */
-        .rv-swap { display: flex; flex-direction: column; height: 100%; gap: 1px; }
-        .rv-swap-half {
-          flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
-          line-height: 1.05; overflow: hidden;
-        }
-        .rv-swap-time { font-size: 7px; color: #475569; letter-spacing: -.04em; }
-        .rv-swap-name { display: block; white-space: nowrap; }
+        /* 1部屋＝朝昼夕の3行。1行は氏名1行ぶんの高さでそろえる。 */
+        .rv-table tbody tr.rv-mealrow td, .rv-table tbody tr.rv-mealrow th { height: 18px; }
+        /* 在室だがその食事はない人。空室（・）と見分けられるよう薄く出す（食事管理アプリと同じ）。 */
+        .rv-stay { color: #cbd5e1; font-style: italic; }
+        @media print { .rv-stay { color: #94a3b8 !important;
+          -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; } }
       `}</style>
 
       <div className="rv-noprint flex items-center gap-3 flex-wrap">
@@ -816,18 +855,19 @@ export default function ReserveLedger({ year, month, people }: Props) {
 
       {/* 部屋×日付 */}
       {loading ? <div className="text-sm text-gray-400 animate-pulse p-4">読み込み中...</div> : (
-        <div className="rv-scroll bg-white rounded-xl border border-gray-100 shadow-sm overflow-auto max-h-[64vh] print:max-h-none"
+        <div ref={bodyRef} className="rv-scroll bg-white rounded-xl border border-gray-100 shadow-sm overflow-auto max-h-[64vh] print:max-h-none"
              onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setPreview(null); }}>
-          <table className="rv-table text-[11px]" style={{ width: 40 + 34 + DAY_W * daysInMonth }}>
+          <table className="rv-table text-[11px]" style={{ width: fixedW + dayW * daysInMonth }}>
             <colgroup>
-              <col style={{ width: 40 }} />
-              <col style={{ width: 34 }} />
-              {dates.map(d => <col key={d} style={{ width: DAY_W }} />)}
+              <col style={{ width: OV_W.bld }} />
+              <col style={{ width: OV_W.room }} />
+              <col style={{ width: OV_W.meal }} />
+              {dates.map(d => <col key={d} style={{ width: dayW }} />)}
             </colgroup>
             <thead>
               <tr>
-                <th style={{ left: 0 }} className="rv-fix bg-gray-50 px-1 py-1 text-gray-500 font-semibold sticky top-0">棟</th>
-                <th style={{ left: 40 }} className="rv-fix bg-gray-50 px-1 py-1 text-gray-500 font-semibold sticky top-0">部屋</th>
+                <th colSpan={2} style={{ left: 0 }} className="rv-fix bg-gray-50 px-1 py-1 text-gray-500 font-semibold sticky top-0">部屋</th>
+                <th style={{ left: OV_W.bld + OV_W.room }} className="rv-fix bg-gray-50 px-1 py-1 text-gray-500 font-semibold sticky top-0">食</th>
                 {dates.map(d => {
                   const w = dowOf(year, month, d);
                   const isToday = isoOf(year, month, d) === today;
@@ -843,112 +883,110 @@ export default function ReserveLedger({ year, month, people }: Props) {
               {buildings.map(b => (
                 <Fragment key={b.name}>
                   {b.rooms.map((rm, ri) => {
-                    const cells = grid.get(`${b.name}-${rm.room}`) ?? [];
-                    // 利用者数の行を挟む棟では、棟の区切り線はそちらに付ける
+                    const roomKey = `${b.name}-${rm.room}`;
+                    const cells = mealGrid.get(roomKey) ?? [];
                     const isLastRoom = ri === b.rooms.length - 1;
                     return (
-                      <tr key={`${b.name}-${rm.room}`} className={`rv-roomrow ${isLastRoom && b.staging ? 'rv-bldend' : ''}`}>
-                        {ri === 0 && (
-                          <th rowSpan={b.rooms.length} style={{ left: 0 }}
-                            className={`rv-fix px-1 py-1 text-[10px] font-bold ${
-                              b.staging ? 'bg-slate-200 text-slate-700'
-                                : b.name === 'さくら' ? 'bg-rose-50 text-rose-700' : 'bg-purple-50 text-purple-700'}`}>{b.name}</th>
-                        )}
-                        <th style={{ left: 40 }}
-                          className={`rv-fix px-1 py-1 font-bold ${
-                            rm.disabled ? 'bg-gray-100 text-gray-300'
-                              : rm.staging ? 'bg-slate-100 text-slate-600' : 'bg-white text-gray-600'}`}>{pad2(rm.room)}</th>
-                        {cells.map((list, i) => {
-                          const rv = list[0];
-                          const iso = isoOf(year, month, i + 1);
-                          const w = dowOf(year, month, i + 1);
-                          // 同日交代：この日に退所する人と入所する人が1人ずつ＝ふつうの入れ替わり。
-                          // 二重予約（赤）ではなく、マスを上下に分けて両方出す。
-                          const leaving = list.length === 2 ? list.find(x => x.end === iso) : undefined;
-                          const arriving = list.length === 2 ? list.find(x => x.start === iso) : undefined;
-                          const handover = !!leaving && !!arriving && leaving.id !== arriving.id;
-                          const dupRoom = list.length > 1 && !handover;
-                          const dupPerson = !!rv && doubleBooked.has(`${rv.name}|${iso}`);
-                          const isSource = !!rv && !!drag && drag.rv.id === rv.id;
-                          const inPreview = !!preview && preview.building === b.name && preview.room === rm.room
-                            && iso >= preview.start && iso <= preview.end;
-                          const toneOf = (x: Reservation) => x.status === '確定'
-                            ? 'bg-indigo-100 text-indigo-950' : 'bg-amber-50 text-amber-900 rv-kari';
-                          const base = !rv
-                            ? (b.staging ? 'bg-slate-50 ' : '') + (dowBg(w) || '') + ' text-gray-300'
-                            : handover ? 'bg-white text-gray-900' : toneOf(rv);
-                          // 塊の枠：月をまたぐぶんは端の縦線を出さない。
-                          // 交代日は両方の塊の端なので、左右とも枠を引く。
-                          const blkS = !!rv && (handover || iso === rv.start);
-                          const blkE = !!rv && (handover || iso === rv.end);
-                          const blk = !rv ? ''
-                            : blkS && blkE ? 'rv-blk-se ' : blkS ? 'rv-blk-s ' : blkE ? 'rv-blk-e ' : 'rv-blk ';
-                          const warn = dupRoom ? 'outline outline-2 outline-red-500 '
-                            : dupPerson ? 'outline outline-2 outline-red-400 bg-red-100 ' : '';
-                          const dnd = inPreview ? 'outline outline-2 outline-sky-600 bg-sky-200 ' : '';
-                          // 入所時間は初日の名前の上、退所時間は最終日の名前の下に出す。
-                          // 家族送迎は時間の前に FA。単日の予約は1マスに上下とも出る。
-                          const showIn = !!rv && iso === rv.start && !!rv.inTime;
-                          const showOut = !!rv && iso === rv.end && !!rv.outTime;
-                          const oneTitle = (x: Reservation) =>
-                            `${x.name}（${x.status}）${x.building}${pad2(x.room)}号 ${x.start}〜${x.end}`
-                            + (x.inTime ? ` / 入所 ${x.inTime}` : '') + (x.outTime ? ` / 退所 ${x.outTime}` : '')
-                            + (x.soutai ? ` / ${x.soutai}` : '') + (x.note ? ` / ${x.note}` : '');
-                          const title = handover
-                            ? `入れ替わりの日\n退所 ${oneTitle(leaving!)}\n入所 ${oneTitle(arriving!)}`
-                            : rv
-                              ? oneTitle(rv)
-                                + (dupRoom ? `　※この部屋に${list.length}件が重なっています` : '')
-                                + (dupPerson ? '　※同じ人が同じ日に別の部屋にも入っています' : '')
-                                + '　（つまんで動かせます）'
-                              : `${iso} 空き`;
-                          return (
-                            <td key={i} title={title}
-                              draggable={!!rv && !busy}
-                              onDragStart={rv ? e => onDragStart(e, rv, i) : undefined}
-                              onDragEnd={clearDrag}
-                              onDragOver={e => onDragOver(e, b.name, rm.room, i)}
-                              onDrop={e => onDrop(e, b.name, rm.room, i)}
-                              onClick={() => rv ? openEdit(rv) : openNew(b.name, rm.room, iso)}
-                              className={`px-0 py-0.5 cursor-pointer hover:outline hover:outline-2 hover:outline-sky-400 ${rv ? 'rv-grab ' : ''}${isSource ? 'opacity-40 ' : ''}${dnd}${warn}${blk}${base}`}>
-                              {handover ? (
-                                // 入れ替わりの日：上＝出る人、下＝入る人
-                                <div className="rv-swap">
-                                  <div className={`rv-swap-half ${toneOf(leaving!)}`}
-                                    onClick={e => { e.stopPropagation(); openEdit(leaving!); }}>
-                                    <span className="rv-swap-time">↑{leaving!.outTime || '退'}</span>
-                                    <span className="rv-name rv-swap-name" style={{ fontSize: swapFontPxFor(leaving!.name) }}>{leaving!.name}</span>
-                                  </div>
-                                  <div className={`rv-swap-half ${toneOf(arriving!)}`}
-                                    onClick={e => { e.stopPropagation(); openEdit(arriving!); }}>
-                                    <span className="rv-swap-time">↓{arriving!.inTime || '入'}</span>
-                                    <span className="rv-name rv-swap-name" style={{ fontSize: swapFontPxFor(arriving!.name) }}>{arriving!.name}</span>
-                                  </div>
-                                </div>
-                              ) : rv ? (
-                                <>
-                                  {showIn && <div className="rv-time">{timeLabel(rv, rv.inTime)}</div>}
-                                  <div className="rv-name" style={{ fontSize: fontPxFor(rv.name) }}>
-                                    {(() => { const [sur, given] = splitName(rv.name); return (
-                                      <>
-                                        <div>{sur}</div>
-                                        {given && <div>{given}</div>}
-                                      </>
-                                    ); })()}
-                                  </div>
-                                  {showOut && <div className="rv-time">{timeLabel(rv, rv.outTime)}</div>}
-                                </>
-                              ) : '・'}
-                            </td>
-                          );
-                        })}
-                      </tr>
+                      <Fragment key={roomKey}>
+                        {MEAL_ROWS.map((mr, mi) => (
+                          <tr key={mr.key}
+                            className={`rv-mealrow ${mi === MEAL_ROWS.length - 1 ? 'rv-roomend' : ''} ${
+                              mi === MEAL_ROWS.length - 1 && isLastRoom && b.staging ? 'rv-bldend' : ''}`}>
+                            {ri === 0 && mi === 0 && (
+                              <th rowSpan={b.rooms.length * MEAL_ROWS.length} style={{ left: 0 }}
+                                className={`rv-fix px-1 py-1 text-[10px] font-bold ${
+                                  b.staging ? 'bg-slate-200 text-slate-700'
+                                    : b.name === 'さくら' ? 'bg-rose-50 text-rose-700' : 'bg-purple-50 text-purple-700'}`}>{b.name}</th>
+                            )}
+                            {mi === 0 && (
+                              <th rowSpan={MEAL_ROWS.length} style={{ left: OV_W.bld }}
+                                className={`rv-fix px-1 py-1 font-bold rv-roomend ${
+                                  rm.disabled ? 'bg-gray-100 text-gray-300'
+                                    : rm.staging ? 'bg-slate-100 text-slate-600' : 'bg-white text-gray-600'}`}>{pad2(rm.room)}</th>
+                            )}
+                            <td style={{ left: OV_W.bld + OV_W.room }}
+                              className="rv-fix px-0.5 py-0 text-[10px] text-gray-500 bg-gray-50">{mr.label}</td>
+
+                            {dates.map((_, i) => {
+                              const iso = isoOf(year, month, i + 1);
+                              const w = dowOf(year, month, i + 1);
+                              const cell = cells[i]?.[mi] ?? { eaters: [] as Reservation[] };
+                              const eater = cell.eaters[0];
+                              const stay = cell.stay;                 // 在室だがこの食事はない人
+                              const shown = eater ?? stay;
+
+                              const dupMeal = cell.eaters.length > 1;  // 同じ部屋の同じ食事に2人＝二重予約
+                              const dupPerson = !!eater && doubleBooked.has(`${eater.name}|${iso}`);
+                              const isSource = !!shown && !!drag && drag.rv.id === shown.id;
+                              const inPreview = !!preview && preview.building === b.name && preview.room === rm.room
+                                && iso >= preview.start && iso <= preview.end;
+
+                              // 塊の枠：隣のマスと同じ人かどうかで辺を決める。
+                              // 月をまたぐぶんや、同日交代で上下の人が変わるところも自然に囲える。
+                              let blk = '';
+                              if (shown) {
+                                const same = (di: number, mj: number) => occAt(roomKey, di, mj)?.id === shown.id;
+                                const top = mi === 0 || !same(i, mi - 1);
+                                const bot = mi === MEAL_ROWS.length - 1 || !same(i, mi + 1);
+                                const left = i === 0 ? shown.start === iso : !same(i - 1, mi);
+                                const right = i === daysInMonth - 1 ? shown.end === iso : !same(i + 1, mi);
+                                blk = `${top ? 'rv-t ' : ''}${bot ? 'rv-b ' : ''}${left ? 'rv-l ' : ''}${right ? 'rv-r ' : ''}`;
+                              }
+
+                              const isWend = w === '土' || w === '日';
+                              const base = eater
+                                ? (eater.status === '確定'
+                                    ? `${mr.tint} text-gray-900` : 'bg-amber-50 text-amber-900 rv-kari')
+                                : stay ? (isWend ? dowBg(w) : '') + ' rv-stay'
+                                : (b.staging ? 'bg-slate-50 ' : '') + (dowBg(w) || '') + ' text-gray-300';
+                              const warn = dupMeal ? 'outline outline-2 outline-red-500 '
+                                : dupPerson ? 'outline outline-2 outline-red-400 bg-red-100 ' : '';
+                              const dnd = inPreview ? 'outline outline-2 outline-sky-600 bg-sky-200 ' : '';
+
+                              // 入所時刻は初日の朝マス、退所時刻は最終日の夕マスに出す。
+                              // 食事ルール上そこは空くことが多いので、ちょうど収まる。
+                              const timeHere = !eater && stay
+                                ? (mi === 0 && stay.start === iso && stay.inTime ? timeLabel(stay, stay.inTime)
+                                  : mi === MEAL_ROWS.length - 1 && stay.end === iso && stay.outTime ? timeLabel(stay, stay.outTime)
+                                  : '')
+                                : '';
+
+                              const title = shown
+                                ? `${shown.name}（${shown.status}）${b.name}${pad2(rm.room)}号 ${shown.start}〜${shown.end}`
+                                  + (shown.inTime ? ` / 入所 ${shown.inTime}` : '') + (shown.outTime ? ` / 退所 ${shown.outTime}` : '')
+                                  + (shown.soutai ? ` / ${shown.soutai}` : '') + (shown.note ? ` / ${shown.note}` : '')
+                                  + (eater ? '' : `　※${mr.label}食はありません`)
+                                  + (dupMeal ? `　※この${mr.label}に${cell.eaters.length}人が重なっています` : '')
+                                  + (dupPerson ? '　※同じ人が同じ日に別の部屋にも入っています' : '')
+                                : `${mdOf(iso)} ${mr.label} 空き`;
+
+                              return (
+                                <td key={i} title={title}
+                                  draggable={!!shown && !busy}
+                                  onDragStart={shown ? e => onDragStart(e, shown, i) : undefined}
+                                  onDragEnd={clearDrag}
+                                  onDragOver={e => onDragOver(e, b.name, rm.room, i)}
+                                  onDrop={e => onDrop(e, b.name, rm.room, i)}
+                                  onClick={() => shown ? openEdit(shown) : openNew(b.name, rm.room, iso)}
+                                  className={`px-0 py-0 cursor-pointer hover:outline hover:outline-2 hover:outline-sky-400 ${
+                                    shown ? 'rv-grab ' : ''}${isSource ? 'opacity-40 ' : ''}${dnd}${warn}${blk}${base}`}>
+                                  {timeHere
+                                    ? <span className="rv-time">{timeHere}</span>
+                                    : shown
+                                      ? <span className="rv-name" style={{ fontSize: fontPxFor(shown.name, dayW) }}>{shown.name}</span>
+                                      : '・'}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </Fragment>
                     );
                   })}
                   {/* 棟ごとの利用者数（食事管理アプリの全体一覧と同じ見せ方） */}
                   {!b.staging && (
                     <tr className="rv-bldend">
-                      <th colSpan={2} style={{ left: 0 }}
+                      <th colSpan={3} style={{ left: 0 }}
                         className={`rv-fix px-1 py-1 text-[10px] font-bold ${
                           b.name === 'さくら' ? 'bg-rose-100 text-rose-800' : 'bg-purple-100 text-purple-800'}`}>
                         {b.name} 計
@@ -970,7 +1008,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
               ))}
               {/* その日の空き部屋数（仮置きは数えない） */}
               <tr>
-                <th colSpan={2} style={{ left: 0 }} className="rv-fix bg-gray-50 px-1 py-1 text-[10px] text-gray-600 font-bold">空き</th>
+                <th colSpan={3} style={{ left: 0 }} className="rv-fix bg-gray-50 px-1 py-1 text-[10px] text-gray-600 font-bold">空き</th>
                 {vacantPerDay.map((n, i) => (
                   <td key={i} className={`px-0.5 py-1 text-[11px] font-bold bg-gray-50 ${n === 0 ? 'text-red-600' : n <= 3 ? 'text-amber-600' : 'text-gray-400'}`}>{n}</td>
                 ))}
