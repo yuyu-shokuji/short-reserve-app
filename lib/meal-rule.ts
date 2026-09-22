@@ -10,6 +10,7 @@
 //            11:30 超 17:30 まで → 朝・昼
 //            17:30 超            → 朝・昼・夕
 //   中日   … 朝・昼・夕
+//   おやつ … 昼と連動（昼が出る日は出る）
 //
 // 食事の無いマスは「薄字で名前」ではなく空にする。その部屋はその食事の時間帯には
 // 空いていて、次の人を受け入れられるため（＝チャート上も空きとして見えてほしい）。
@@ -73,3 +74,37 @@ export function mealsFor(
 }
 
 export const MEAL_LABEL: Record<MealKey, string> = { asa: '朝', hiru: '昼', yu: '夕' };
+
+// ── おやつ ───────────────────────────────────────────────────────────
+// 2026-09-22 現場確認：**おやつは昼と連動する**（昼が出る日は出る）。
+//
+// チャートは食事管理アプリの全体一覧に合わせて「1部屋＝朝・昼・夕の3行」なので、
+// おやつは Meals（＝チャートの行）には入れていない。行を増やすと表が崩れるため。
+// 食事管理アプリの「ショート_記録」へ書き出すときに、下の関数で足す。
+//
+// ⚠️ 全体行事で別業者から調達する日（イベント）は、ここでは扱わない。
+//    食事管理アプリの「イベント」シートに 日付 | ショート | おやつ の行を入れると、
+//    厨房アプリが集計から外す仕組みがすでにある（meal-app/lib/events.ts）。
+//    そちらは「利用者の食べる/食べないの記録はそのまま残す」決まりなので、
+//    書き出すときにイベントを気にする必要はない。
+
+/** その日おやつを出すか。昼と連動する。 */
+export function oyatsuOf(m: Meals): boolean {
+  return m.hiru;
+}
+
+/** 朝・昼・おやつ・夕の4つ。「ショート_記録」へ書き出すときの形。 */
+export interface MealsAll extends Meals { oyatsu: boolean }
+
+/** ある予約の、ある日に出す食事（おやつ込み）。 */
+export function mealsAllFor(
+  r: { start: string; end: string; inTime: string; outTime: string },
+  iso: string,
+): MealsAll {
+  const m = mealsFor(r, iso);
+  return { ...m, oyatsu: oyatsuOf(m) };
+}
+
+export const MEAL_ALL_LABEL: Record<keyof MealsAll, string> = {
+  asa: '朝', hiru: '昼', oyatsu: 'おやつ', yu: '夕',
+};
