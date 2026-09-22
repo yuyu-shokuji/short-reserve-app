@@ -4,15 +4,17 @@
 // 画面（チャート）も食数の見せ方もここの判定を使う。
 //
 // 現場のルール（2026-09-22 時点）
-//   退所日 … 11:00 まで          → 朝のみ
-//            11:00 超 16:00 まで → 朝・昼
-//            16:00 超            → 朝・昼・夕
-//   入所日 … 13:00 以降          → 夕のみ
-//            11:00 以降          → 昼・夕
-//            11:00 より前        → 朝・昼・夕
+//   入所日 … 朝食は出さない（何時に来ても）
+//            13:00 以降 → 夕のみ ／ それより前 → 昼・夕
+//   退所日 … 11:30 まで          → 朝のみ
+//            11:30 超 17:30 まで → 朝・昼
+//            17:30 超            → 朝・昼・夕
 //   中日   … 朝・昼・夕
 //
-// 時刻が空のときは、従来の現場ルール（入所日は朝を出さない／退所日は夕を出さない）を既定にする。
+// 食事の無いマスは「薄字で名前」ではなく空にする。その部屋はその食事の時間帯には
+// 空いていて、次の人を受け入れられるため（＝チャート上も空きとして見えてほしい）。
+//
+// 時刻が空のときは、入所日＝昼夕／退所日＝朝昼 を既定にする。
 
 export type MealKey = 'asa' | 'hiru' | 'yu';
 export const MEAL_KEYS: MealKey[] = ['asa', 'hiru', 'yu'];
@@ -32,22 +34,20 @@ export function minutesOf(t: string): number | null {
 
 const HH = (h: number, m = 0) => h * 60 + m;
 
-/** 退所日に出す食事 */
+/** 退所日に出す食事。17:30以前なら夕は不要、11:30以前なら昼も不要。 */
 export function mealsOnCheckout(outTime: string): Meals {
   const t = minutesOf(outTime);
   if (t === null) return { asa: true, hiru: true, yu: false };   // 時刻未入力＝夕は出さない
-  if (t <= HH(11)) return { asa: true, hiru: false, yu: false };
-  if (t <= HH(16)) return { asa: true, hiru: true, yu: false };
+  if (t <= HH(11, 30)) return { asa: true, hiru: false, yu: false };
+  if (t <= HH(17, 30)) return { asa: true, hiru: true, yu: false };
   return { ...ALL };
 }
 
-/** 入所日に出す食事 */
+/** 入所日に出す食事。入所日は朝食を食べない。13:00以降の入所なら昼も不要。 */
 export function mealsOnCheckin(inTime: string): Meals {
   const t = minutesOf(inTime);
-  if (t === null) return { asa: false, hiru: true, yu: true };   // 時刻未入力＝朝は出さない
-  if (t >= HH(13)) return { asa: false, hiru: false, yu: true };
-  if (t >= HH(11)) return { asa: false, hiru: true, yu: true };
-  return { ...ALL };
+  if (t !== null && t >= HH(13)) return { asa: false, hiru: false, yu: true };
+  return { asa: false, hiru: true, yu: true };
 }
 
 const and = (a: Meals, b: Meals): Meals => ({
