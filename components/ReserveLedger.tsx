@@ -57,12 +57,19 @@ const dowColor = (w: string) => (w === '日' ? 'text-red-500' : w === '土' ? 't
 const dowBg = (w: string) => (w === '日' ? 'bg-red-50' : w === '土' ? 'bg-blue-50' : '');
 
 /**
+ * チャートに出す氏名は姓名の間の空白を詰める。
+ * 隣のマスとの間隔が狭いので、空白があるとマスの切れ目と見間違える。
+ * （データ・一覧・ツールチップは元の表記のまま）
+ */
+const tightName = (s: string) => String(s ?? '').replace(/[\s　]+/g, '');
+
+/**
  * 列幅に収まる文字サイズ。1部屋3行（朝昼夕）にしたので氏名は1行で出す。
  * 食事管理アプリの全体一覧と同じ考え方＝列幅 ÷ 文字数。
  * 画面が広いほど列が広がり、自動的に文字も大きくなる。
  */
 function fontPxFor(s: string, dayW: number): number {
-  const n = Math.max(1, String(s ?? '').length);
+  const n = Math.max(1, tightName(s).length);
   return Math.max(6, Math.min(12, Math.floor(dayW / n)));
 }
 
@@ -83,19 +90,35 @@ function addDays(iso: string, n: number): string {
 const nightsOf = (start: string, end: string) =>
   Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86400000);
 
+const HOUR_OPTS = Array.from({ length: 24 }, (_, i) => pad2(i));
+const MIN_OPTS = Array.from({ length: 12 }, (_, i) => pad2(i * 5));   // 00,05,…,55
+
 /**
- * 時刻を5分単位に丸める（"10:03" → "10:05"）。
- * 入力欄は step=300 で5分刻みにしてあるが、手打ちやコピー貼り付けの端数もここで吸収する。
- * 60分に繰り上がったら次の時へ。24時を越えたら 23:55 で止める。
+ * 時刻の入力欄。「時」と「分」のプルダウン2つに分ける。
+ * type="time" だと分が1分刻みで出てしまい、現場では選びにくいため。
+ * 分は5分刻み。時を選んだときに分が空なら 00 を入れる。
  */
-function snapTo5(t: string): string {
-  const m = /^(\d{1,2}):(\d{1,2})$/.exec(String(t ?? '').trim());
-  if (!m) return t;
-  let h = Number(m[1]);
-  let mi = Math.round(Number(m[2]) / 5) * 5;
-  if (mi >= 60) { mi = 0; h += 1; }
-  if (h >= 24) return '23:55';
-  return `${pad2(h)}:${pad2(mi)}`;
+function TimeSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const m = /^(\d{1,2}):(\d{1,2})$/.exec(String(value ?? '').trim());
+  const h = m ? pad2(Number(m[1])) : '';
+  // シートに5分刻みでない値が入っていても、いちばん近い選択肢を出す
+  const mi = m ? pad2(Math.min(55, Math.round(Number(m[2]) / 5) * 5)) : '';
+  const sel = 'border border-gray-200 rounded-md px-2 py-1.5 text-sm bg-white';
+  return (
+    <span className="inline-flex items-center gap-1">
+      <select value={h} className={sel}
+        onChange={e => onChange(e.target.value ? `${e.target.value}:${mi || '00'}` : '')}>
+        <option value="">--</option>
+        {HOUR_OPTS.map(o => <option key={o} value={o}>{o}</option>)}
+      </select>
+      <span className="text-gray-400">:</span>
+      <select value={mi} disabled={!h} className={`${sel} ${h ? '' : 'opacity-40'}`}
+        onChange={e => onChange(`${h}:${e.target.value}`)}>
+        {!h && <option value="">--</option>}
+        {MIN_OPTS.map(o => <option key={o} value={o}>{o}</option>)}
+      </select>
+    </span>
+  );
 }
 
 const mdOf = (iso: string) => {
@@ -539,9 +562,9 @@ export default function ReserveLedger({ year, month, people }: Props) {
           .rv-fix { position: static !important; }
         }
         .rv-table { border-collapse: collapse; table-layout: fixed; }
-        /* 横線（部屋と部屋の区切り）は縦線より太くする＝行を目で追いやすい */
+        /* 朝昼夕の間は縦線と同じ薄さ。部屋と部屋の区切りだけを太くして見分ける。 */
         .rv-table th, .rv-table td {
-          border: 1px solid #eef1f5; border-bottom: 2px solid #cbd5e1;
+          border: 1px solid #eef1f5;
           white-space: nowrap; text-align: center; overflow: hidden;
         }
         .rv-table tbody tr.rv-bldend td, .rv-table tbody tr.rv-bldend th { border-bottom: 3px solid #94a3b8; }
@@ -549,12 +572,15 @@ export default function ReserveLedger({ year, month, people }: Props) {
         .rv-table tbody tr.rv-roomend td, .rv-table tbody tr.rv-roomend th { border-bottom: 2px solid #cbd5e1; }
         /* 予約の塊を枠で囲う。border-collapse と喧嘩しないよう内側の影で描く。
            隣のマスと同じ人かどうかで辺を出し分けるので、月またぎや同日交代も自然に囲える。 */
+        /* 既定値は var() のフォールバックで持つ。td 側に --bt などを書いてしまうと
+           そちらの詳細度が勝って .rv-t が効かなくなる（枠が出なくなる）。 */
+        .rv-table td {
+          box-shadow: var(--bt, 0 0 #0000), var(--bb, 0 0 #0000), var(--bl, 0 0 #0000), var(--br, 0 0 #0000);
+        }
         .rv-t { --bt: inset 0 2px 0 #1e293b; }
         .rv-b { --bb: inset 0 -2px 0 #1e293b; }
         .rv-l { --bl: inset 2px 0 0 #1e293b; }
         .rv-r { --br: inset -2px 0 0 #1e293b; }
-        .rv-table td { --bt: 0 0 #0000; --bb: 0 0 #0000; --bl: 0 0 #0000; --br: 0 0 #0000;
-          box-shadow: var(--bt), var(--bb), var(--bl), var(--br); }
         /* 左に固定する2列。背景色は各セルのクラスに任せる（ここで白を敷くと棟の色が消える）。 */
         .rv-fix { position: sticky; }
         .rv-table thead .rv-fix { z-index: 25; }
@@ -790,19 +816,15 @@ export default function ReserveLedger({ year, month, people }: Props) {
 
           {/* 入退所の時間と送迎区分は別もの。送迎なしでも時間は入れられる。 */}
           <div className="flex items-end gap-3 flex-wrap">
-            {/* 時間は5分刻み（step=300）。手で打った端数は5分単位に丸める。 */}
-            <label className="text-xs text-gray-600 space-y-1">
+            {/* 時刻は「時」「分」のプルダウン。分は5分刻み。 */}
+            <div className="text-xs text-gray-600 space-y-1">
               <span className="font-semibold block">入所時間（初日）</span>
-              <input type="time" step={300} value={form.inTime}
-                onChange={e => patch({ inTime: snapTo5(e.target.value) })}
-                className="border border-gray-200 rounded-md px-2 py-1.5 text-sm" />
-            </label>
-            <label className="text-xs text-gray-600 space-y-1">
+              <TimeSelect value={form.inTime} onChange={v => patch({ inTime: v })} />
+            </div>
+            <div className="text-xs text-gray-600 space-y-1">
               <span className="font-semibold block">退所時間（最終日）</span>
-              <input type="time" step={300} value={form.outTime}
-                onChange={e => patch({ outTime: snapTo5(e.target.value) })}
-                className="border border-gray-200 rounded-md px-2 py-1.5 text-sm" />
-            </label>
+              <TimeSelect value={form.outTime} onChange={v => patch({ outTime: v })} />
+            </div>
             <label className="text-xs text-gray-600 space-y-1">
               <span className="font-semibold block">送迎</span>
               <select value={form.soutai} onChange={e => patch({ soutai: e.target.value as SoutaiKind })}
@@ -973,7 +995,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
                                   {timeHere
                                     ? <span className="rv-time">{timeHere}</span>
                                     : shown
-                                      ? <span className="rv-name" style={{ fontSize: fontPxFor(shown.name, dayW) }}>{shown.name}</span>
+                                      ? <span className="rv-name" style={{ fontSize: fontPxFor(shown.name, dayW) }}>{tightName(shown.name)}</span>
                                       : '・'}
                                 </td>
                               );
