@@ -210,6 +210,24 @@ export default function ReserveLedger({ year, month, people }: Props) {
   // 削除ログ（消した予約の履歴）。開いたときだけ読む。
   const [trashOpen, setTrashOpen] = useState(false);
   const [trash, setTrash] = useState<TrashEntry[] | null>(null);
+  /**
+   * 氏名の出し方。現場と相談中のため画面で切り替えられるようにしてある（2026-09-22）。
+   *   every … 滞在している日すべてに出す（従来。既定）
+   *   once  … 塊に1回だけ中央に大きく出す（ガントチャート流）
+   * 選んだほうはこの端末に覚えておく。
+   */
+  const [nameMode, setNameMode] = useState<'every' | 'once'>('every');
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem('rv-name-mode');
+      if (v === 'once' || v === 'every') setNameMode(v);
+    } catch { /* 保存できない環境では既定のまま */ }
+  }, []);
+  const changeNameMode = (v: 'every' | 'once') => {
+    setNameMode(v);
+    try { localStorage.setItem('rv-name-mode', v); } catch { /* 保存できなくても表示は変わる */ }
+  };
+
   // 表を置ける幅（列幅を画面いっぱいに広げるため。食事管理アプリの全体一覧と同じ）
   const bodyRef = useRef<HTMLDivElement>(null);
   const [availW, setAvailW] = useState(0);
@@ -757,6 +775,18 @@ export default function ReserveLedger({ year, month, people }: Props) {
         )}
         <button onClick={() => openNew(rooms[0]?.building ?? 'さくら', rooms[0]?.room ?? 1, isoOf(year, month, 1))}
           className="ml-auto bg-emerald-500 text-white rounded-lg px-4 py-2 text-sm font-semibold hover:bg-emerald-600">＋ 予約を追加</button>
+        {/* 氏名の出し方（現場と相談中。見比べられるよう画面で切り替えられる） */}
+        <span className="inline-flex items-center rounded-lg bg-gray-100 p-0.5 text-xs"
+          title="チャートに氏名をどう出すか。現場で見比べて決めてください。">
+          <span className="px-1.5 text-gray-500">氏名</span>
+          {([['every', '毎日'], ['once', '塊に1回']] as const).map(([v, label]) => (
+            <button key={v} onClick={() => changeNameMode(v)}
+              className={`px-2 py-1 rounded-md font-semibold ${
+                nameMode === v ? 'bg-white shadow text-gray-800' : 'text-gray-500 hover:text-gray-700'}`}>
+              {label}
+            </button>
+          ))}
+        </span>
         <button onClick={() => { const open = !trashOpen; setTrashOpen(open); if (open) loadTrash(); }}
           className={`rounded-lg px-3 py-2 text-sm font-semibold ${trashOpen ? 'bg-slate-600 text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}>
           🗑 削除の履歴
@@ -1128,20 +1158,23 @@ export default function ReserveLedger({ year, month, people }: Props) {
                                   onDrop={e => onDrop(e, b.name, rm.room, i)}
                                   onClick={() => shown ? openEdit(shown) : timeRv ? openEdit(timeRv) : openNew(b.name, rm.room, iso)}
                                   className={`px-0 py-0 cursor-pointer hover:outline hover:outline-2 hover:outline-sky-400 ${
-                                    cell.label ? 'rv-haslabel ' : ''}${
+                                    cell.label && nameMode === 'once' ? 'rv-haslabel ' : ''}${
                                     shown ? 'rv-grab ' : ''}${isSource ? 'opacity-40 ' : ''}${dnd}${warn}${blk}${base}`}>
-                                  {cell.label ? (() => {
-                                    // 塊の幅いっぱいを使って中央に1回だけ出す（はみ出しは塊の幅で止まる）
-                                    const w = Math.max(dayW, cell.label.runLen * dayW - 4);
-                                    const nm = tightName(cell.label.rv.name);
-                                    const fs = Math.max(9, Math.min(14, Math.floor(w / Math.max(1, nm.length))));
-                                    const dx = cell.label.offCells * dayW;
-                                    return <span className="rv-name rv-blockname"
-                                      style={{ width: w, fontSize: fs, transform: `translate(calc(-50% + ${dx}px), -50%)` }}>{nm}</span>;
-                                  })()
-                                    : timeHere ? <span className="rv-time">{timeHere}</span>
-                                    : shown ? ''
-                                    : '・'}
+                                  {timeHere ? <span className="rv-time">{timeHere}</span>
+                                    : !shown ? '・'
+                                    : nameMode === 'every'
+                                      // 毎日出す（従来）
+                                      ? <span className="rv-name" style={{ fontSize: fontPxFor(shown.name, dayW) }}>{tightName(shown.name)}</span>
+                                      // 塊に1回だけ。塊の幅いっぱいを使って中央に出す（はみ出しは塊の幅で止まる）
+                                      : cell.label ? (() => {
+                                          const w = Math.max(dayW, cell.label.runLen * dayW - 4);
+                                          const nm = tightName(cell.label.rv.name);
+                                          const fs = Math.max(9, Math.min(14, Math.floor(w / Math.max(1, nm.length))));
+                                          const dx = cell.label.offCells * dayW;
+                                          return <span className="rv-name rv-blockname"
+                                            style={{ width: w, fontSize: fs, transform: `translate(calc(-50% + ${dx}px), -50%)` }}>{nm}</span>;
+                                        })()
+                                      : ''}
                                 </td>
                               );
                             })}
