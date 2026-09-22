@@ -26,6 +26,7 @@ export async function POST(req: NextRequest) {
       const conflicts = await findConflicts({
         id: p.id, name: String(p.name ?? ''), building: String(p.building ?? ''),
         room: Number(p.room), start: String(p.start ?? ''), end: String(p.end ?? ''),
+        inTime: String(p.inTime ?? ''), outTime: String(p.outTime ?? ''),
       });
       if (conflicts.length) return NextResponse.json({ conflict: true, conflicts });
     }

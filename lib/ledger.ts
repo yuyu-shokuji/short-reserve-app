@@ -12,6 +12,7 @@ import {
   readSheets, writeSheetAoa, batchWrite, ensureSheetExists, appendRow,
   SHEET, type CellWrite, type CellClear,
 } from './sheets';
+import { classifyOverlap, isBlocking, type Span } from './overlap';
 
 const COLS = ['ID', '氏名', '棟', '部屋', '開始日', '終了日', '状態', '送迎', '入所時間', '退所時間', '備考', '登録日時'] as const;
 
@@ -242,10 +243,11 @@ export async function findVacancies(
   const { reservations, rooms } = await loadAll();
   // 仮置きは実在する部屋ではないので「空いている部屋」に出さない
   const vacancies: Vacancy[] = rooms.filter(r => !r.disabled && !r.staging).map(r => {
+    // 空き検索は時刻が決まっていない段階で使うので、同日交代は「入れられる可能性あり」として
+    // ふさがり扱いにしない（実際に入れるときの時刻チェックは保存前の findConflicts で行う）。
     const takenBy = reservations
       .filter(x => x.id !== excludeId && x.building === r.building && x.room === r.room
         && overlaps(x.start, x.end, start, end)
-        // 退所日と入所日が重なるだけの入れ替わりは「ふさがっている」に数えない
         && !isHandover(x.start, x.end, start, end))
       .map(x => ({ name: x.name, start: x.start, end: x.end, status: x.status }));
     return { building: r.building, room: r.room, free: takenBy.length === 0, takenBy: takenBy.length ? takenBy : undefined };
@@ -256,27 +258,53 @@ export async function findVacancies(
 // ── 重なりチェック ───────────────────────────────────────────────────
 
 export interface Conflict {
-  /** room = 同じ部屋の二重予約／person = 同じ人を同じ日に別の部屋へ（逆ダブルブッキング） */
-  kind: 'room' | 'person';
+  /**
+   * room     = 同じ部屋の二重予約（期間がまるごと重なる）
+   * handover = 同じ部屋の同日交代だが、時刻が合わない／時刻が未入力で確かめられない
+   * person   = 同じ人を同じ日に別の部屋へ（逆ダブルブッキング）
+   */
+  kind: 'room' | 'handover' | 'person';
   other: Reservation;
   days: string[];
+  /** handover のとき、どちらが何時に出て、どちらが何時に入るか */
+  detail?: { outName: string; outTime: string; inName: string; inTime: string; day: string };
 }
 
 export async function findConflicts(cand: {
-  id?: string; name: string; building: string; room: number; start: string; end: string;
+  id?: string; name: string; building: string; room: number;
+  start: string; end: string; inTime?: string; outTime?: string;
 }): Promise<Conflict[]> {
   const { reservations } = await loadAll();
+  const candSpan: Span = {
+    start: cand.start, end: cand.end,
+    inTime: cand.inTime ?? '', outTime: cand.outTime ?? '',
+  };
   const out: Conflict[] = [];
   for (const r of reservations) {
     if (cand.id && r.id === cand.id) continue;
-    const days = overlapDays(r.start, r.end, cand.start, cand.end);
-    if (!days.length) continue;
+
     if (r.building === cand.building && r.room === cand.room) {
-      // 同日交代（退所日＝入所日で、重なりがその1日だけ）はふつうの入れ替わりなので通す
-      if (isHandover(r.start, r.end, cand.start, cand.end)) continue;
-      out.push({ kind: 'room', other: r, days });
+      const res = classifyOverlap(r, candSpan);
+      if (!isBlocking(res.kind)) continue;          // 重ならない／時刻的に入れ替われる
+      if (res.kind === 'overlap') { out.push({ kind: 'room', other: r, days: res.days }); continue; }
+      // 同日交代だが時刻が合わない（または時刻未入力で判断できない）
+      const h = res.handover!;
+      const outIsOther = h.out === r;
+      out.push({
+        kind: 'handover', other: r, days: res.days,
+        detail: {
+          outName: outIsOther ? r.name : cand.name.trim(), outTime: h.outTime,
+          inName: outIsOther ? cand.name.trim() : r.name, inTime: h.inTime,
+          day: h.day,
+        },
+      });
+      continue;
     }
-    else if (r.name === cand.name.trim()) out.push({ kind: 'person', other: r, days });
+
+    if (r.name === cand.name.trim()) {
+      const days = overlapDays(r.start, r.end, cand.start, cand.end);
+      if (days.length) out.push({ kind: 'person', other: r, days });
+    }
   }
   return out;
 }

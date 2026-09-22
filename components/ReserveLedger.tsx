@@ -13,6 +13,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Person } from './ReserveApp';
 import { mealsFor, MEAL_KEYS, type MealKey } from '@/lib/meal-rule';
+import { classifyOverlap } from '@/lib/overlap';
 
 type SoutaiKind = '' | '送迎あり' | '家族送迎';
 
@@ -34,7 +35,12 @@ interface Reservation {
 /** 家族送迎は時間の前に「FA」を付けて出す */
 const timeLabel = (rv: Reservation, t: string) => (rv.soutai === '家族送迎' ? `FA ${t}` : t);
 interface Room { building: string; room: number; disabled: boolean; staging: boolean; note: string; }
-interface Conflict { kind: 'room' | 'person'; other: Reservation; days: string[]; }
+interface Conflict {
+  kind: 'room' | 'handover' | 'person';
+  other: Reservation;
+  days: string[];
+  detail?: { outName: string; outTime: string; inName: string; inTime: string; day: string };
+}
 interface Vacancy {
   building: string; room: number; free: boolean;
   takenBy?: { name: string; start: string; end: string; status: string }[];
@@ -119,6 +125,29 @@ function TimeSelect({ value, onChange }: { value: string; onChange: (v: string) 
       </select>
     </span>
   );
+}
+
+/** 重なり1件ぶんの説明。保存前の確認と移動の確認で同じ文言を使う。 */
+function ConflictLine({ c }: { c: Conflict }) {
+  const span = `${mdOf(c.days[0])}〜${mdOf(c.days[c.days.length - 1])}`;
+  if (c.kind === 'handover' && c.detail) {
+    const d = c.detail;
+    const unknown = !d.outTime || !d.inTime;
+    return (
+      <>
+        <b className={unknown ? 'text-amber-800' : 'text-red-700'}>
+          {unknown ? '入れ替わりの時刻が確かめられません' : '入れ替わりの時刻が合いません'}
+        </b>
+        ：{mdOf(d.day)} に <b>{d.outName}</b> さんが退所 {d.outTime || '（時刻未入力）'}、
+        <b>{d.inName}</b> さんが入所 {d.inTime || '（時刻未入力）'}
+        {unknown ? '（どちらかの時刻を入れると判定できます）' : '（前の人が出る前に次の人が入ります）'}
+      </>
+    );
+  }
+  if (c.kind === 'room') {
+    return <>同じ部屋（{c.other.building}{pad2(c.other.room)}号）に <b>{c.other.name}</b> さんの{c.other.status}：{span}</>;
+  }
+  return <><b className="text-red-700">同じ人を別の部屋にも</b>：{c.other.name} さんは {c.other.building}{pad2(c.other.room)}号 にも{c.other.status}（{span}）</>;
 }
 
 const mdOf = (iso: string) => {
@@ -282,6 +311,38 @@ export default function ReserveLedger({ year, month, people }: Props) {
   /** そのマスで食事をする人。塊の枠はこれを基準に描くので、食事の無いマスは枠から外れる。 */
   const occAt = useCallback((roomKey: string, dayIdx: number, mealIdx: number): Reservation | undefined =>
     mealGrid.get(roomKey)?.[dayIdx]?.[mealIdx]?.eaters[0], [mealGrid]);
+
+  /**
+   * 時刻が合わない同日交代。
+   * 例）さくら01 を 11:00 に退所する人がいる日に、10:00 入所の人を入れると重なる。
+   * 食事は 朝＝前の人／昼夕＝次の人 と分かれてしまうので食事のマスだけでは気づけない。
+   * 部屋＋日付で持ち、その日の3行すべてを赤くする。
+   */
+  const timeClash = useMemo(() => {
+    const byRoom = new Map<string, Reservation[]>();
+    for (const rv of rows) {
+      const k = `${rv.building}-${rv.room}`;
+      if (!byRoom.has(k)) byRoom.set(k, []);
+      byRoom.get(k)!.push(rv);
+    }
+    const bad = new Map<string, { day: string; outName: string; outTime: string; inName: string; inTime: string; unknown: boolean }>();
+    for (const [k, list] of byRoom) {
+      for (let i = 0; i < list.length; i++) {
+        for (let j = i + 1; j < list.length; j++) {
+          const res = classifyOverlap(list[i], list[j]);
+          if (res.kind !== 'handover-clash' && res.kind !== 'handover-unknown') continue;
+          const h = res.handover!;
+          bad.set(`${k}|${h.day}`, {
+            day: h.day,
+            outName: (h.out as Reservation).name, outTime: h.outTime,
+            inName: (h.in as Reservation).name, inTime: h.inTime,
+            unknown: res.kind === 'handover-unknown',
+          });
+        }
+      }
+    }
+    return bad;
+  }, [rows]);
 
   // 逆ダブルブッキング：同じ人が同じ日に2部屋以上に入っているマス
   const doubleBooked = useMemo(() => {
@@ -720,6 +781,22 @@ export default function ReserveLedger({ year, month, people }: Props) {
           ⚠ 同じ人が同じ日に2部屋以上に入っています（表の赤いマス）。どちらかを直してください。
         </div>
       )}
+      {/* 時刻が合わない同日交代。食事のマスだけでは気づけないので、ここに一覧で出す。 */}
+      {timeClash.size > 0 && (
+        <div className="rv-noprint rounded-lg border border-red-300 bg-red-50 px-3 py-2.5 text-sm text-red-800 space-y-1">
+          <div className="font-bold">⚠ 同じ日の入れ替わりで時刻が合っていません（{timeClash.size}件）</div>
+          <ul className="list-disc pl-5 max-h-32 overflow-y-auto">
+            {[...timeClash.entries()].map(([k, c]) => (
+              <li key={k} className={c.unknown ? 'text-amber-800' : ''}>
+                {k.split('|')[0].replace('-', '')}号　{mdOf(c.day)}：
+                <b>{c.outName}</b> さん退所 {c.outTime || '（時刻未入力）'} →{' '}
+                <b>{c.inName}</b> さん入所 {c.inTime || '（時刻未入力）'}
+                {c.unknown ? '（時刻が入っていないので確認できません）' : '（前の人が出る前に次の人が入ります）'}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* 書こうとしたら重なっていたときの確認（移動・削除の取り消しで共用） */}
       {ask && (
@@ -728,9 +805,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
           <ul className="list-disc pl-5 max-h-32 overflow-y-auto">
             {ask.conflicts.map((c, i) => (
               <li key={i}>
-                {c.kind === 'room'
-                  ? <>その部屋に <b>{c.other.name}</b> さんの{c.other.status}：{mdOf(c.days[0])}〜{mdOf(c.days[c.days.length - 1])}</>
-                  : <><b className="text-red-700">同じ人を別の部屋にも</b>：{c.other.building}{pad2(c.other.room)}号 にも{c.other.status}（{mdOf(c.days[0])}〜{mdOf(c.days[c.days.length - 1])}）</>}
+                <ConflictLine c={c} />
               </li>
             ))}
           </ul>
@@ -868,9 +943,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
               <ul className="list-disc pl-5 max-h-32 overflow-y-auto">
                 {conflicts.map((c, i) => (
                   <li key={i}>
-                    {c.kind === 'room'
-                      ? <>同じ部屋（{c.other.building}{pad2(c.other.room)}号）に <b>{c.other.name}</b> さんの{c.other.status}：{mdOf(c.days[0])}〜{mdOf(c.days[c.days.length - 1])}</>
-                      : <><b className="text-red-700">同じ人を別の部屋にも</b>：{c.other.name} さんは {c.other.building}{pad2(c.other.room)}号 にも{c.other.status}（{mdOf(c.days[0])}〜{mdOf(c.days[c.days.length - 1])}）</>}
+                    <ConflictLine c={c} />
                   </li>
                 ))}
               </ul>
@@ -954,6 +1027,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
 
                               const dupMeal = cell.eaters.length > 1;  // 同じ部屋の同じ食事に2人＝二重予約
                               const dupPerson = !!eater && doubleBooked.has(`${eater.name}|${iso}`);
+                              const clash = timeClash.get(`${b.name}-${rm.room}|${iso}`);  // 時刻の合わない交代
                               const isSource = !!shown && !!drag && drag.rv.id === shown.id;
                               const inPreview = !!preview && preview.building === b.name && preview.room === rm.room
                                 && iso >= preview.start && iso <= preview.end;
@@ -975,6 +1049,9 @@ export default function ReserveLedger({ year, month, people }: Props) {
                                     ? `${mr.tint} text-gray-900` : 'bg-amber-50 text-amber-900 rv-kari')
                                 : (b.staging ? 'bg-slate-50 ' : '') + (dowBg(w) || '') + ' text-gray-300';
                               const warn = dupMeal ? 'outline outline-2 outline-red-500 '
+                                : clash ? (clash.unknown
+                                    ? 'outline outline-2 outline-amber-500 bg-amber-100 '
+                                    : 'outline outline-2 outline-red-500 bg-red-100 ')
                                 : dupPerson ? 'outline outline-2 outline-red-400 bg-red-100 ' : '';
                               const dnd = inPreview ? 'outline outline-2 outline-sky-600 bg-sky-200 ' : '';
 
@@ -989,9 +1066,13 @@ export default function ReserveLedger({ year, month, people }: Props) {
                                 : timeRv
                                   ? `${oneTitle(timeRv)}　※この${mr.label}は食事なし（部屋は空き）`
                                   : `${mdOf(iso)} ${mr.label} 空き`;
+                              const title2 = clash
+                                ? `${title}\n⚠ ${mdOf(clash.day)}：${clash.outName} さんの退所${clash.outTime || '（時刻未入力）'} より前に `
+                                  + `${clash.inName} さんが入所${clash.inTime || '（時刻未入力）'} になっています`
+                                : title;
 
                               return (
-                                <td key={i} title={title}
+                                <td key={i} title={title2}
                                   draggable={!!shown && !busy}
                                   onDragStart={shown ? e => onDragStart(e, shown, i) : undefined}
                                   onDragEnd={clearDrag}
