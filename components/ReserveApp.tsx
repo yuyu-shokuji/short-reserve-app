@@ -38,7 +38,7 @@ export default function ReserveApp() {
             <span className="text-3xl">🛏</span>
             <div>
               <h1 className="text-xl font-bold text-gray-800">ショート予約台帳</h1>
-              <p className="text-sm text-gray-500">メゾン悠遊</p>
+              <p className="text-sm text-gray-500">グラン悠遊</p>
             </div>
           </div>
           <div className="flex items-center gap-1">

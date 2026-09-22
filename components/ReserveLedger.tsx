@@ -887,7 +887,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
         {printChart ? (
           <>
             <span className="text-base font-bold">
-              メゾン悠遊　ショート予約台帳　{year}年{month}月
+              グラン悠遊　ショート予約台帳　{year}年{month}月
             </span>
             <span className="ml-4 text-[10px] font-normal text-gray-600">
               <span className="rv-lg rv-lg-occ" /> 確定 {rows.filter(r => r.status === '確定').length}件
@@ -897,7 +897,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
           </>
         ) : (
           <span className="text-base font-bold">
-            メゾン悠遊　ショート予約一覧　{year}年{month}月（{rows.length}件・あいうえお順）
+            グラン悠遊　ショート予約一覧　{year}年{month}月（{rows.length}件・あいうえお順）
             <span className="ml-3 text-[10px] font-normal text-gray-600">印刷 {today}</span>
           </span>
         )}
@@ -1433,9 +1433,10 @@ export default function ReserveLedger({ year, month, people }: Props) {
                   <>
                     {realB.map((b, bi) => (
                       <Fragment key={b.name}>
-                        {bi > 0 && dateRow(`date-${b.name}`)}
+                        {/* 前の棟の下に仮置きを1つ置き、そのあとに次の棟の日付行を出す */}
                         {bi > 0 && stagingB && stagingRooms[bi - 1] &&
                           roomRows(stagingB, stagingRooms[bi - 1], { bldSpan: MEAL_ROWS.length, endsGroup: true })}
+                        {bi > 0 && dateRow(`date-${b.name}`)}
                         {sumRow(b)}
                         {b.rooms.map((rm, ri) => roomRows(b, rm, {
                           bldSpan: ri === 0 ? b.rooms.length * MEAL_ROWS.length : undefined,
@@ -1449,14 +1450,6 @@ export default function ReserveLedger({ year, month, people }: Props) {
                   </>
                 );
               })()}
-              {/* その日の空き部屋数（仮置きは数えない） */}
-              <tr className="rv-sum">
-                <th colSpan={3} style={{ left: 0 }} className="rv-fix bg-gray-50 px-1 py-1 text-[10px] text-gray-600 font-bold">空き</th>
-                {dates.map(d => {
-                  const n = vacantPerDay[d - 1] ?? 0;
-                  return <td key={d} className={`px-0.5 py-1 text-[11px] font-bold bg-gray-50 ${n === 0 ? 'text-red-600' : n <= 3 ? 'text-amber-600' : 'text-gray-400'}`}>{n}</td>;
-                })}
-              </tr>
             </tbody>
           </table>
         </div>
