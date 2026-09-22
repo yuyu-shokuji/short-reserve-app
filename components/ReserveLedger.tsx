@@ -25,15 +25,22 @@ interface Reservation {
   start: string;
   end: string;
   status: '仮予約' | '確定';
-  soutai: SoutaiKind;
-  inTime: string;    // 入所時間（初日）
-  outTime: string;   // 退所時間（最終日）
+  inTime: string;          // 入所時間（初日）
+  soutaiIn: SoutaiKind;    // 入所時の送迎
+  outTime: string;         // 退所時間（最終日）
+  soutaiOut: SoutaiKind;   // 退所時の送迎
   note: string;
   createdAt: string;
 }
 
-/** 家族送迎は時間の前に「FA」を付けて出す */
-const timeLabel = (rv: Reservation, t: string) => (rv.soutai === '家族送迎' ? `FA ${t}` : t);
+/** 家族送迎は時間の前に「FA」を付けて出す。送迎は入所・退所で別なので、その向きのほうを見る。 */
+const timeLabel = (s: SoutaiKind, t: string) => (s === '家族送迎' ? `FA ${t}` : t);
+/** 一覧表で時刻のうしろに出す送迎の印。 */
+function SoutaiBadge({ s }: { s: SoutaiKind }) {
+  if (s === '家族送迎') return <span className="px-1 py-0.5 rounded bg-slate-200 text-slate-700 font-bold">FA</span>;
+  if (s === '送迎あり') return <span className="px-1 py-0.5 rounded bg-sky-100 text-sky-800">送迎</span>;
+  return null;
+}
 interface Room { building: string; room: number; disabled: boolean; staging: boolean; note: string; }
 interface Conflict {
   kind: 'room' | 'handover' | 'person';
@@ -45,6 +52,13 @@ interface Vacancy {
   building: string; room: number; free: boolean;
   takenBy?: { name: string; start: string; end: string; status: string }[];
 }
+
+/** 表に出す期間。half は紙の台帳に合わせた前半・後半の2枚。 */
+type RangeKind = 'full' | 'first' | 'second';
+const HALF_AT = 15;                 // 前半は1〜15日、後半は16日〜月末
+const RANGE_LABEL: Record<RangeKind, string> = { full: '1ヶ月', first: '前半', second: '後半' };
+// A3横（余白6mm）の印刷できる範囲。1mm = 96/25.4 px。
+const PRINT_W = 1542, PRINT_H = 1077;
 
 const WD = ['日', '月', '火', '水', '木', '金', '土'];
 const pad2 = (n: number) => String(n).padStart(2, '0');
@@ -163,9 +177,10 @@ interface FormState {
   start: string;
   end: string;
   status: '仮予約' | '確定';
-  soutai: SoutaiKind;
   inTime: string;
+  soutaiIn: SoutaiKind;
   outTime: string;
+  soutaiOut: SoutaiKind;
   note: string;
 }
 
@@ -180,8 +195,8 @@ interface AskState { title: string; conflicts: Conflict[]; confirmLabel: string;
 interface TrashEntry {
   deletedAt: string; undone: string;
   id: string; name: string; building: string; room: number;
-  start: string; end: string; status: '仮予約' | '確定'; soutai: SoutaiKind;
-  inTime: string; outTime: string; note: string;
+  start: string; end: string; status: '仮予約' | '確定';
+  inTime: string; soutaiIn: SoutaiKind; outTime: string; soutaiOut: SoutaiKind; note: string;
 }
 
 interface Props { year: number; month: number; people: Person[]; }
@@ -212,27 +227,55 @@ export default function ReserveLedger({ year, month, people }: Props) {
   const [trash, setTrash] = useState<TrashEntry[] | null>(null);
   /**
    * 氏名の出し方。現場と相談中のため画面で切り替えられるようにしてある（2026-09-22）。
-   *   every … 滞在している日すべてに出す（従来。既定）
-   *   once  … 塊に1回だけ中央に大きく出す（ガントチャート流）
+   *   every … 滞在している日すべてに出す
+   *   once  … 塊に1回だけ中央に大きく出す（ガントチャート流。既定）
    * 選んだほうはこの端末に覚えておく。
+   * 既定を once にした際にキー名を変えてある（前に毎日を選んだ端末でも、まず once で見えるように）。
    */
-  const [nameMode, setNameMode] = useState<'every' | 'once'>('every');
+  const [nameMode, setNameMode] = useState<'every' | 'once'>('once');
   useEffect(() => {
     try {
-      const v = localStorage.getItem('rv-name-mode');
+      const v = localStorage.getItem('rv-name-mode2');
       if (v === 'once' || v === 'every') setNameMode(v);
     } catch { /* 保存できない環境では既定のまま */ }
   }, []);
   const changeNameMode = (v: 'every' | 'once') => {
     setNameMode(v);
-    try { localStorage.setItem('rv-name-mode', v); } catch { /* 保存できなくても表示は変わる */ }
+    try { localStorage.setItem('rv-name-mode2', v); } catch { /* 保存できなくても表示は変わる */ }
   };
+
+  /**
+   * 表に出す期間。いまの紙の台帳が前半・後半の2枚なので、その形と1ヶ月1枚の両方を出せるようにする。
+   * 日数が減るぶん1日あたりの列が広くなる＝氏名が大きく出せる。行数（部屋数）は変わらない。
+   */
+  const [range, setRange] = useState<RangeKind>('full');
+  const dayFrom = range === 'second' ? HALF_AT + 1 : 1;
+  const dayTo = range === 'first' ? Math.min(HALF_AT, daysInMonth) : daysInMonth;
+
+  /**
+   * 印刷は台帳（A3横）と予約一覧（A4縦）で紙が違うので、ボタンも別にして押したほうだけ刷る。
+   * 用紙の指定は CSS の @page で、状態が画面に反映されてから印刷を呼ぶ必要がある（nonce で1拍おく）。
+   */
+  const [printWhat, setPrintWhat] = useState<'chart' | 'list'>('chart');
+  const [printNonce, setPrintNonce] = useState(0);
+  const doPrint = (what: 'chart' | 'list') => { setPrintWhat(what); setPrintNonce(n => n + 1); };
+  useEffect(() => {
+    if (!printNonce) return;
+    const t = setTimeout(() => window.print(), 80);
+    return () => clearTimeout(t);
+  }, [printNonce]);
 
   // 表を置ける幅（列幅を画面いっぱいに広げるため。食事管理アプリの全体一覧と同じ）
   const bodyRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<HTMLTableElement>(null);
   const [availW, setAvailW] = useState(0);
+  // 表の高さ（部屋数で決まる。日数を減らしても縮まない）。A3に収める縮小率を出すのに使う。
+  const [chartH, setChartH] = useState(0);
   useEffect(() => {
-    const measure = () => { if (bodyRef.current) setAvailW(bodyRef.current.clientWidth); };
+    const measure = () => {
+      if (bodyRef.current) setAvailW(bodyRef.current.clientWidth);
+      if (chartRef.current) setChartH(chartRef.current.offsetHeight);
+    };
     measure();
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
@@ -329,11 +372,11 @@ export default function ReserveLedger({ year, month, people }: Props) {
           const eaten = MEAL_KEYS.map((k, mi) => (m[k] ? mi : -1)).filter(x => x >= 0);
           if (iso === rv.start && rv.inTime) {
             const first = eaten.length ? eaten[0] : MEAL_KEYS.length - 1;
-            putTime(rv, timeLabel(rv, rv.inTime), first - 1, first);
+            putTime(rv, timeLabel(rv.soutaiIn, rv.inTime), first - 1, first);
           }
           if (iso === rv.end && rv.outTime) {
             const last = eaten.length ? eaten[eaten.length - 1] : 0;
-            putTime(rv, timeLabel(rv, rv.outTime), last + 1, last);
+            putTime(rv, timeLabel(rv.soutaiOut, rv.outTime), last + 1, last);
           }
         }
         return out;
@@ -355,10 +398,16 @@ export default function ReserveLedger({ year, month, people }: Props) {
           i = j + 1;
         }
       }
+      // 前半・後半に切って出すときは、画面（紙）に出ている範囲の真ん中に置く。
+      // そうしないと、切れ目をまたぐ塊の氏名がもう一方の紙にだけ載って、片方が無名になる。
+      const lo = dayFrom - 1, hi = dayTo - 1;
       for (const list of runs.values()) {
+        const seen = list
+          .map(x => ({ ...x, s: Math.max(x.s, lo), e: Math.min(x.e, hi) }))
+          .filter(x => x.s <= x.e);
         let best: { rv: Reservation; row: number; s: number; e: number } | undefined;
         for (const pref of [1, 2, 0]) {                         // 昼・夕・朝
-          const cand = list.filter(x => x.row === pref).sort((a, b) => (b.e - b.s) - (a.e - a.s))[0];
+          const cand = seen.filter(x => x.row === pref).sort((a, b) => (b.e - b.s) - (a.e - a.s))[0];
           if (cand) { best = cand; break; }
         }
         if (!best) continue;
@@ -372,7 +421,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
       map.set(key, days);
     }
     return map;
-  }, [grid, rooms, daysInMonth, year, month]);
+  }, [grid, rooms, daysInMonth, year, month, dayFrom, dayTo]);
 
   /** そのマスで食事をする人。塊の枠はこれを基準に描くので、食事の無いマスは枠から外れる。 */
   const occAt = useCallback((roomKey: string, dayIdx: number, mealIdx: number): Reservation | undefined =>
@@ -487,7 +536,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
     setForm({
       id: '', name: '', building, room, start: iso, end: iso,
       // 時刻の既定値。空にすると時刻欄が「いまの時刻」から始まって使いにくいため。
-      status: '仮予約', soutai: '', inTime: '09:00', outTime: '16:00', note: '',
+      status: '仮予約', inTime: '09:00', soutaiIn: '', outTime: '16:00', soutaiOut: '', note: '',
     });
     setConflicts(null); setMsg('');
   };
@@ -495,7 +544,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
     setForm({
       id: rv.id, name: rv.name, building: rv.building, room: rv.room,
       start: rv.start, end: rv.end, status: rv.status,
-      soutai: rv.soutai, inTime: rv.inTime, outTime: rv.outTime, note: rv.note,
+      inTime: rv.inTime, soutaiIn: rv.soutaiIn, outTime: rv.outTime, soutaiOut: rv.soutaiOut, note: rv.note,
     });
     setConflicts(null); setMsg('');
   };
@@ -592,7 +641,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           id: rv.id, name: rv.name, building, room, start, end, status: rv.status,
-          soutai: rv.soutai, inTime: rv.inTime, outTime: rv.outTime, note: rv.note,
+          inTime: rv.inTime, soutaiIn: rv.soutaiIn, outTime: rv.outTime, soutaiOut: rv.soutaiOut, note: rv.note,
           force: !!opts?.force,
         }),
       });
@@ -663,14 +712,15 @@ export default function ReserveLedger({ year, month, people }: Props) {
   };
 
   const nameKnown = !form?.name.trim() || people.some(p => p.name === form.name.trim());
-  const dates = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+  // 出す日付（1始まりの日）。マス目そのものは月ぜんぶ持っているので、ここは「どこを見せるか」だけ。
+  const dates = Array.from({ length: Math.max(0, dayTo - dayFrom + 1) }, (_, i) => dayFrom + i);
   const today = todayISO();
   const formNights = form ? nightsOf(form.start, form.end) : 0;
   const freeList = vacancy?.vacancies.filter(v => v.free) ?? [];
 
   // 日付列の幅＝画面の空き幅を日数で割って広げる（狭い画面では DAY_MIN で横スクロール）
   const fixedW = OV_W.bld + OV_W.room + OV_W.meal;
-  const dayW = Math.max(DAY_MIN, Math.floor(((availW || 0) - fixedW) / daysInMonth) || 0);
+  const dayW = Math.max(DAY_MIN, Math.floor(((availW || 0) - fixedW) / (dates.length || 1)) || 0);
 
   /**
    * 下の一覧はあいうえお順（利用者シートのふりがな）。
@@ -692,18 +742,76 @@ export default function ReserveLedger({ year, month, people }: Props) {
       || a.start.localeCompare(b.start);
   }), [rows, furiOf]);
 
+  // 紙は A3横1枚。部屋数ぶんの高さははみ出しがちなので、その分だけ全体を縮める。
+  // 横は縮めたあとにちょうど紙幅になるよう、先に広げた幅を入れておく。
+  const printChart = printWhat === 'chart';
+  const printBody = PRINT_H - 44;   // 見出し1行ぶんを空けておく
+  const printZoom = chartH > printBody ? Math.max(0.5, Math.floor((printBody / chartH) * 100) / 100) : 1;
+  const printTableW = Math.round((PRINT_W - 2) / printZoom);
+
   return (
     <div className="rv-print space-y-4">
       <style>{`
         @media print {
-          @page { size: A3 landscape; margin: 6mm; }
+          /* 台帳（A3横1枚）と一覧（A4縦）は別々に刷る。押したボタンで用紙ごと切り替える。 */
+          @page { size: ${printChart ? 'A3 landscape' : 'A4 portrait'}; margin: ${printChart ? '6mm' : '10mm'}; }
           body * { visibility: hidden !important; }
           .rv-print, .rv-print * { visibility: visible !important; }
           .rv-print { position: absolute; left: 0; top: 0; width: 100%; }
           .rv-noprint, .rsv-noprint { display: none !important; }
           .rv-scroll { overflow: visible !important; max-height: none !important; }
           .rv-fix { position: static !important; }
+          /* 画面用の行間は紙では無駄になるので詰める */
+          .rv-print > * + * { margin-top: 2px !important; }
+          /* 押していないほうは紙に出さない */
+          ${printChart ? '.rv-list' : '.rv-chart'} { display: none !important; }
+
+          /* 表だけを1枚に収める。ズームなので行が紙の途中で切れない。 */
+          .rv-chart { zoom: ${printZoom}; }
+          .rv-chart .rv-table { width: ${printTableW}px !important; }
+          .rv-chart, .rv-list { border: 0 !important; box-shadow: none !important; border-radius: 0 !important; }
+
+          /* 予約一覧（A4縦）。現場の見やすさ優先で14pt。日付は月日だけにして幅を詰める。 */
+          .rv-list table { font-size: 14pt; width: 100% !important; }
+          .rv-list thead { display: table-header-group; }   /* 2枚目以降にも見出しを出す */
+          .rv-list tr { break-inside: avoid; page-break-inside: avoid; }
+          .rv-list th, .rv-list td {
+            padding: 2px 4px !important; color: #000 !important;
+            font-size: inherit !important; white-space: nowrap;
+          }
+          .rv-list thead th { font-size: 11pt !important; border-bottom: 1px solid #666 !important; }
+
+          /* ── 白黒印刷用の塗り ──────────────────────────────
+             ① 背景は既定では刷られないので exact を付けて必ず出す
+             ② 画面の淡い色は刷るとほぼ白で、埋まっている感じが出ない
+             ③ 色ではなく「濃さ」と「模様」で確定と仮予約を分ける          */
+          .rv-print, .rv-print * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          /* いちど全部を白に戻してから敷き直す（画面の淡い色が灰色に化けるのを防ぐ） */
+          .rv-table th, .rv-table td {
+            background: #fff !important; background-image: none !important;
+            color: #000 !important; border-color: #e3e3e3 !important;
+          }
+          .rv-table td.rv-occ { background: #d5d5d5 !important; }            /* 確定＝ベタ塗り */
+          .rv-table td.rv-kari {                                              /* 仮予約＝斜線 */
+            background-image: repeating-linear-gradient(45deg, #9b9b9b 0 2px, #fff 2px 7px) !important;
+          }
+          .rv-table td.rv-empty.rv-we { background: #f4f4f4 !important; }     /* 土日の空きだけ薄く */
+          .rv-table td.rv-empty { color: transparent !important; }            /* 空きマスの「・」は消す */
+          .rv-table .rv-time { color: #000 !important; }
+          .rv-table thead th.rv-dayhead { background: #ededed !important; }
+          .rv-table thead th.rv-dayhead.rv-we { background: #d4d4d4 !important; }
+          .rv-table tbody tr.rv-sum td, .rv-table tbody tr.rv-sum th { background: #ededed !important; }
+          /* 部屋と棟の区切りは紙でも分かる濃さに */
+          .rv-table tbody tr.rv-roomend td, .rv-table tbody tr.rv-roomend th { border-bottom-color: #9a9a9a !important; }
+          .rv-table tbody tr.rv-bldend td, .rv-table tbody tr.rv-bldend th { border-bottom-color: #4a4a4a !important; }
+          /* 一覧のほうは文字で読むので、状態や送迎の色札は外して黒文字にする */
+          .rv-list span { background: none !important; color: #000 !important; padding: 0 2px !important; font-size: inherit !important; }
+          .rv-list tbody tr { border-top-color: #bbb !important; }
         }
+        /* 紙の見出しに出す凡例。画面では見出しごと隠れている。 */
+        .rv-lg { display: inline-block; width: 15px; height: 10px; border: 1px solid #555; vertical-align: -1px; }
+        .rv-lg-occ { background: #d5d5d5; }
+        .rv-lg-kari { background-image: repeating-linear-gradient(45deg, #9b9b9b 0 2px, #fff 2px 7px); }
         .rv-table { border-collapse: collapse; table-layout: fixed; }
         /* 朝昼夕の間は縦線と同じ薄さ。部屋と部屋の区切りだけを太くして見分ける。 */
         .rv-table th, .rv-table td {
@@ -758,6 +866,28 @@ export default function ReserveLedger({ year, month, people }: Props) {
         }
       `}</style>
 
+      {/* 紙に出るときだけの見出し。貼り出したときに何の表か分かるようにする。 */}
+      <div className="hidden print:block mb-1">
+        {printChart ? (
+          <>
+            <span className="text-base font-bold">
+              メゾン悠遊　ショート予約台帳　{year}年{month}月
+              {range !== 'full' && `（${RANGE_LABEL[range]} ${dayFrom}〜${dayTo}日）`}
+            </span>
+            <span className="ml-4 text-[10px] font-normal text-gray-600">
+              <span className="rv-lg rv-lg-occ" /> 確定 {rows.filter(r => r.status === '確定').length}件
+              　<span className="rv-lg rv-lg-kari" /> 仮予約 {rows.filter(r => r.status === '仮予約').length}件
+              {occupancy && `　稼働率 ${occupancy.pct}%`}　印刷 {today}
+            </span>
+          </>
+        ) : (
+          <span className="text-base font-bold">
+            メゾン悠遊　ショート予約一覧　{year}年{month}月（{rows.length}件・あいうえお順）
+            <span className="ml-3 text-[10px] font-normal text-gray-600">印刷 {today}</span>
+          </span>
+        )}
+      </div>
+
       <div className="rv-noprint flex items-center gap-3 flex-wrap">
         <h2 className="text-lg font-bold text-gray-800">{year}年{month}月の予約</h2>
         <span className="text-sm text-gray-500">
@@ -785,6 +915,18 @@ export default function ReserveLedger({ year, month, people }: Props) {
         )}
         <button onClick={() => openNew(rooms[0]?.building ?? 'さくら', rooms[0]?.room ?? 1, isoOf(year, month, 1))}
           className="ml-auto bg-emerald-500 text-white rounded-lg px-4 py-2 text-sm font-semibold hover:bg-emerald-600">＋ 予約を追加</button>
+        {/* 印刷の単位。いまの紙の台帳が前半・後半の2枚なので、その形と1ヶ月1枚を見比べられるようにする。 */}
+        <span className="inline-flex items-center rounded-lg bg-gray-100 p-0.5 text-xs"
+          title="表に出す期間。前半・後半に分けると1日あたりの幅が広くなり、氏名が大きく出ます。">
+          <span className="px-1.5 text-gray-500">期間</span>
+          {(['full', 'first', 'second'] as const).map(v => (
+            <button key={v} onClick={() => setRange(v)}
+              className={`px-2 py-1 rounded-md font-semibold ${
+                range === v ? 'bg-white shadow text-gray-800' : 'text-gray-500 hover:text-gray-700'}`}>
+              {RANGE_LABEL[v]}
+            </button>
+          ))}
+        </span>
         {/* 氏名の出し方（現場と相談中。見比べられるよう画面で切り替えられる） */}
         <span className="inline-flex items-center rounded-lg bg-gray-100 p-0.5 text-xs"
           title="チャートに氏名をどう出すか。現場で見比べて決めてください。">
@@ -801,7 +943,8 @@ export default function ReserveLedger({ year, month, people }: Props) {
           className={`rounded-lg px-3 py-2 text-sm font-semibold ${trashOpen ? 'bg-slate-600 text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}>
           🗑 削除の履歴
         </button>
-        <button onClick={() => window.print()} className="bg-sky-500 text-white rounded-lg px-3 py-2 text-sm font-semibold">🖨 印刷（A3横）</button>
+        <button onClick={() => doPrint('chart')} className="bg-sky-500 text-white rounded-lg px-3 py-2 text-sm font-semibold hover:bg-sky-600">🖨 台帳を印刷（A3横）</button>
+        <button onClick={() => doPrint('list')} className="bg-sky-100 text-sky-800 rounded-lg px-3 py-2 text-sm font-semibold hover:bg-sky-200">🖨 一覧を印刷（A4縦）</button>
         <button onClick={() => load()} className="bg-gray-200 text-gray-700 rounded-lg px-3 py-2 text-sm font-semibold">🔄 更新</button>
       </div>
 
@@ -847,8 +990,6 @@ export default function ReserveLedger({ year, month, people }: Props) {
             )}
         </div>
       )}
-
-      <div className="print:block hidden text-base font-bold mb-1">ショート予約台帳　{year}年{month}月</div>
 
       {/* ドラッグ中の行き先を文字でも出す（マスが小さいので取り違え防止） */}
       {drag && preview && (
@@ -996,13 +1137,23 @@ export default function ReserveLedger({ year, month, people }: Props) {
               <span className="font-semibold block">入所時間（初日）</span>
               <TimeSelect value={form.inTime} onChange={v => patch({ inTime: v })} />
             </div>
+            {/* 送迎は入所と退所で違うことがあるので別々に選ぶ */}
+            <label className="text-xs text-gray-600 space-y-1">
+              <span className="font-semibold block">入所の送迎</span>
+              <select value={form.soutaiIn} onChange={e => patch({ soutaiIn: e.target.value as SoutaiKind })}
+                className="border border-gray-200 rounded-md px-2 py-1.5 text-sm bg-white">
+                <option value="">なし</option>
+                <option value="送迎あり">送迎あり</option>
+                <option value="家族送迎">家族送迎（FA）</option>
+              </select>
+            </label>
             <div className="text-xs text-gray-600 space-y-1">
               <span className="font-semibold block">退所時間（最終日）</span>
               <TimeSelect value={form.outTime} onChange={v => patch({ outTime: v })} />
             </div>
             <label className="text-xs text-gray-600 space-y-1">
-              <span className="font-semibold block">送迎</span>
-              <select value={form.soutai} onChange={e => patch({ soutai: e.target.value as SoutaiKind })}
+              <span className="font-semibold block">退所の送迎</span>
+              <select value={form.soutaiOut} onChange={e => patch({ soutaiOut: e.target.value as SoutaiKind })}
                 className="border border-gray-200 rounded-md px-2 py-1.5 text-sm bg-white">
                 <option value="">なし</option>
                 <option value="送迎あり">送迎あり</option>
@@ -1015,8 +1166,11 @@ export default function ReserveLedger({ year, month, people }: Props) {
                 className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-sm" placeholder="連絡事項など" />
             </label>
           </div>
-          {form.soutai === '家族送迎' && (
-            <div className="text-xs text-slate-600">※ 家族送迎の予約は、表の時間の前に <b>FA</b> と出ます。</div>
+          {(form.soutaiIn === '家族送迎' || form.soutaiOut === '家族送迎') && (
+            <div className="text-xs text-slate-600">
+              ※ 家族送迎は、表のその向きの時刻の前に <b>FA</b> と出ます
+              （{form.soutaiIn === '家族送迎' ? '入所' : ''}{form.soutaiIn === '家族送迎' && form.soutaiOut === '家族送迎' ? '・' : ''}{form.soutaiOut === '家族送迎' ? '退所' : ''}）。
+            </div>
           )}
 
           {!nameKnown && (
@@ -1050,9 +1204,9 @@ export default function ReserveLedger({ year, month, people }: Props) {
 
       {/* 部屋×日付 */}
       {loading ? <div className="text-sm text-gray-400 animate-pulse p-4">読み込み中...</div> : (
-        <div ref={bodyRef} className="rv-scroll bg-white rounded-xl border border-gray-100 shadow-sm overflow-auto max-h-[64vh] print:max-h-none"
+        <div ref={bodyRef} className="rv-chart rv-scroll bg-white rounded-xl border border-gray-100 shadow-sm overflow-auto max-h-[64vh] print:max-h-none"
              onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setPreview(null); }}>
-          <table className="rv-table text-[11px]" style={{ width: fixedW + dayW * daysInMonth }}>
+          <table ref={chartRef} className="rv-table text-[11px]" style={{ width: fixedW + dayW * dates.length }}>
             <colgroup>
               <col style={{ width: OV_W.bld }} />
               <col style={{ width: OV_W.room }} />
@@ -1067,7 +1221,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
                   const w = dowOf(year, month, d);
                   const isToday = isoOf(year, month, d) === today;
                   return (
-                    <th key={d} className={`px-0.5 py-1 font-semibold sticky top-0 z-10 print:static ${dowColor(w)} ${isToday ? 'bg-emerald-100' : dowBg(w) || 'bg-gray-50'}`}>
+                    <th key={d} className={`rv-dayhead ${w === '日' || w === '土' ? 'rv-we ' : ''}px-0.5 py-1 font-semibold sticky top-0 z-10 print:static ${dowColor(w)} ${isToday ? 'bg-emerald-100' : dowBg(w) || 'bg-gray-50'}`}>
                       <div>{d}</div><div className="text-[9px] font-normal">{w}</div>
                     </th>
                   );
@@ -1102,9 +1256,10 @@ export default function ReserveLedger({ year, month, people }: Props) {
                             <td style={{ left: OV_W.bld + OV_W.room }}
                               className="rv-fix px-0.5 py-0 text-[10px] text-gray-500 bg-gray-50">{mr.label}</td>
 
-                            {dates.map((_, i) => {
-                              const iso = isoOf(year, month, i + 1);
-                              const w = dowOf(year, month, i + 1);
+                            {dates.map(d => {
+                              const i = d - 1;                       // マス目は月ぜんぶぶんあるので、日から引く
+                              const iso = isoOf(year, month, d);
+                              const w = dowOf(year, month, d);
                               const cell = cells[i]?.[mi] ?? { eaters: [] as Reservation[] };
                               const eater = cell.eaters[0];
                               // 名前が出るのは食事のあるマスだけ。食事の無いマスは空＝次の人を入れられる。
@@ -1133,10 +1288,13 @@ export default function ReserveLedger({ year, month, people }: Props) {
                                 blk = `${top ? 'rv-t ' : ''}${bot ? 'rv-b ' : ''}${left ? 'rv-l ' : ''}${right ? 'rv-r ' : ''}`;
                               }
 
+                              // rv-occ / rv-kari / rv-empty は白黒印刷用の目印。
+                              // 画面の淡い色は刷るとほぼ白なので、印刷側でグレーと斜線に置き換える。
                               const base = eater
                                 ? (eater.status === '確定'
-                                    ? `${mr.tint} text-gray-900` : 'bg-amber-50 text-amber-900 rv-kari')
-                                : (b.staging ? 'bg-slate-50 ' : '') + (dowBg(w) || '') + ' text-gray-300';
+                                    ? `rv-occ ${mr.tint} text-gray-900` : 'rv-kari bg-amber-50 text-amber-900')
+                                : 'rv-empty ' + (b.staging ? 'bg-slate-50 ' : '') + (dowBg(w) || '') + ' text-gray-300'
+                                  + (w === '日' || w === '土' ? ' rv-we' : '');
                               const warn = dupMeal ? 'outline outline-2 outline-red-500 '
                                 : clash ? (clash.unknown
                                     ? 'outline outline-2 outline-amber-500 bg-amber-100 '
@@ -1147,7 +1305,8 @@ export default function ReserveLedger({ year, month, people }: Props) {
                               const oneTitle = (x: Reservation) =>
                                 `${x.name}（${x.status}）${b.name}${pad2(rm.room)}号 ${x.start}〜${x.end}`
                                 + (x.inTime ? ` / 入所 ${x.inTime}` : '') + (x.outTime ? ` / 退所 ${x.outTime}` : '')
-                                + (x.soutai ? ` / ${x.soutai}` : '') + (x.note ? ` / ${x.note}` : '');
+                                + (x.soutaiIn ? ` / 入所${x.soutaiIn}` : '') + (x.soutaiOut ? ` / 退所${x.soutaiOut}` : '')
+                                + (x.note ? ` / ${x.note}` : '');
                               const title = shown
                                 ? oneTitle(shown)
                                   + (dupMeal ? `　※この${mr.label}に${cell.eaters.length}人が重なっています` : '')
@@ -1161,7 +1320,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
                                 : title;
 
                               return (
-                                <td key={i} title={title2}
+                                <td key={d} title={title2}
                                   draggable={!!shown && !busy}
                                   onDragStart={shown ? e => onDragStart(e, shown, i) : undefined}
                                   onDragEnd={clearDrag}
@@ -1210,17 +1369,18 @@ export default function ReserveLedger({ year, month, people }: Props) {
                   })}
                   {/* 棟ごとの利用者数（食事管理アプリの全体一覧と同じ見せ方） */}
                   {!b.staging && (
-                    <tr className="rv-bldend">
+                    <tr className="rv-bldend rv-sum">
                       <th colSpan={3} style={{ left: 0 }}
                         className={`rv-fix px-1 py-1 text-[10px] font-bold ${
                           b.name === 'さくら' ? 'bg-rose-100 text-rose-800' : 'bg-purple-100 text-purple-800'}`}>
                         {b.name} 計
                       </th>
-                      {(countsPerBuilding.get(b.name) ?? []).map((c, i) => {
-                        const w = dowOf(year, month, i + 1);
+                      {dates.map(d => {
+                        const c = (countsPerBuilding.get(b.name) ?? [])[d - 1] ?? 0;
+                        const w = dowOf(year, month, d);
                         const full = c >= b.rooms.filter(r => !r.disabled).length;
                         return (
-                          <td key={i} title={`${mdOf(isoOf(year, month, i + 1))} ${b.name} ${c}名`}
+                          <td key={d} title={`${mdOf(isoOf(year, month, d))} ${b.name} ${c}名`}
                             className={`px-0.5 py-1 text-[11px] font-bold ${dowBg(w) || 'bg-gray-50'} ${
                               !c ? 'text-gray-300' : full ? 'text-red-600' : 'text-emerald-700'}`}>
                             {c || ''}
@@ -1232,11 +1392,12 @@ export default function ReserveLedger({ year, month, people }: Props) {
                 </Fragment>
               ))}
               {/* その日の空き部屋数（仮置きは数えない） */}
-              <tr>
+              <tr className="rv-sum">
                 <th colSpan={3} style={{ left: 0 }} className="rv-fix bg-gray-50 px-1 py-1 text-[10px] text-gray-600 font-bold">空き</th>
-                {vacantPerDay.map((n, i) => (
-                  <td key={i} className={`px-0.5 py-1 text-[11px] font-bold bg-gray-50 ${n === 0 ? 'text-red-600' : n <= 3 ? 'text-amber-600' : 'text-gray-400'}`}>{n}</td>
-                ))}
+                {dates.map(d => {
+                  const n = vacantPerDay[d - 1] ?? 0;
+                  return <td key={d} className={`px-0.5 py-1 text-[11px] font-bold bg-gray-50 ${n === 0 ? 'text-red-600' : n <= 3 ? 'text-amber-600' : 'text-gray-400'}`}>{n}</td>;
+                })}
               </tr>
             </tbody>
           </table>
@@ -1244,8 +1405,8 @@ export default function ReserveLedger({ year, month, people }: Props) {
       )}
 
       {/* この月の予約一覧 */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-        <div className="px-3 py-2 font-bold text-sm bg-gray-50 border-b border-gray-200">
+      <div className="rv-list bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="rv-listhead print:hidden px-3 py-2 font-bold text-sm bg-gray-50 border-b border-gray-200">
           {year}年{month}月にかかる予約（{rows.length}件）
           <span className="ml-2 font-normal text-xs text-gray-400">あいうえお順</span>
         </div>
@@ -1258,8 +1419,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
                 <th className="px-3 py-1.5">氏名</th><th className="px-2 py-1.5">部屋</th>
                 <th className="px-2 py-1.5">期間</th><th className="px-2 py-1.5">泊</th>
                 <th className="px-2 py-1.5">状態</th>
-                <th className="px-2 py-1.5">入所</th><th className="px-2 py-1.5">退所</th>
-                <th className="px-2 py-1.5">送迎</th>
+                <th className="px-2 py-1.5">入所（送迎）</th><th className="px-2 py-1.5">退所（送迎）</th>
                 <th className="px-2 py-1.5">備考</th><th className="rv-noprint px-2 py-1.5"></th>
               </tr>
             </thead>
@@ -1268,19 +1428,20 @@ export default function ReserveLedger({ year, month, people }: Props) {
                 <tr key={r.id} className="border-t border-gray-100">
                   <td className="px-3 py-1.5 font-medium text-gray-800">{r.name}</td>
                   <td className="px-2 py-1.5 text-gray-600">{r.building}{pad2(r.room)}</td>
-                  <td className="px-2 py-1.5 text-gray-600 tabular-nums">{r.start} 〜 {r.end}</td>
+                  {/* 紙（A4縦）は幅が足りないので月日だけにする */}
+                  <td className="px-2 py-1.5 text-gray-600 tabular-nums whitespace-nowrap">
+                    <span className="print:hidden">{r.start} 〜 {r.end}</span>
+                    <span className="hidden print:inline">{mdOf(r.start)}〜{mdOf(r.end)}</span>
+                  </td>
                   <td className="px-2 py-1.5 text-gray-500 tabular-nums">{nightsOf(r.start, r.end)}</td>
                   <td className="px-2 py-1.5">
                     <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${r.status === '確定' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>{r.status}</span>
                   </td>
-                  <td className="px-2 py-1.5 text-xs text-gray-600 tabular-nums">{r.inTime}</td>
-                  <td className="px-2 py-1.5 text-xs text-gray-600 tabular-nums">{r.outTime}</td>
-                  <td className="px-2 py-1.5 text-xs">
-                    {r.soutai === '家族送迎'
-                      ? <span className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 font-bold">FA 家族送迎</span>
-                      : r.soutai === '送迎あり'
-                        ? <span className="text-gray-600">送迎あり</span>
-                        : ''}
+                  <td className="px-2 py-1.5 text-xs text-gray-600 tabular-nums whitespace-nowrap">
+                    {r.inTime} <SoutaiBadge s={r.soutaiIn} />
+                  </td>
+                  <td className="px-2 py-1.5 text-xs text-gray-600 tabular-nums whitespace-nowrap">
+                    {r.outTime} <SoutaiBadge s={r.soutaiOut} />
                   </td>
                   <td className="px-2 py-1.5 text-xs text-gray-500">{r.note}</td>
                   <td className="rv-noprint px-2 py-1.5">

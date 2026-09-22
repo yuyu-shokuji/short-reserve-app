@@ -4,9 +4,16 @@
 *.log
 .env
 .env.local
+.env*.local
 .DS_Store
+Thumbs.db
 next-env.d.ts
+tsconfig.tsbuildinfo
+
 # 秘密情報・本番データは絶対にコミットしない
 service-account-key.json
 *.xlsx
 *.xlsm
+
+# このPCだけの権限設定。共有しない
+.claude/settings.local.json

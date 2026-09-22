@@ -14,7 +14,9 @@ import {
 } from './sheets';
 import { classifyOverlap, isBlocking, type Span } from './overlap';
 
-const COLS = ['ID', '氏名', '棟', '部屋', '開始日', '終了日', '状態', '送迎', '入所時間', '退所時間', '備考', '登録日時'] as const;
+// 送迎は入所時と退所時で違うことがあるので別々に持つ（2026-09-22に1つから分けた）
+const COLS = ['ID', '氏名', '棟', '部屋', '開始日', '終了日', '状態',
+  '入所時間', '入所送迎', '退所時間', '退所送迎', '備考', '登録日時'] as const;
 
 export type ReserveStatus = '仮予約' | '確定';
 
@@ -29,10 +31,11 @@ export interface Reservation {
   start: string;       // YYYY-MM-DD（初日＝入所日）
   end: string;         // YYYY-MM-DD（最終日＝退所日）
   status: ReserveStatus;
-  soutai: SoutaiKind;
   // 入退所の時間は送迎の有無と関係なく使う（送迎なしでも来所・帰宅の時間は要る）
   inTime: string;      // 入所時間（初日）
+  soutaiIn: SoutaiKind;   // 入所時の送迎
   outTime: string;     // 退所時間（最終日）
+  soutaiOut: SoutaiKind;  // 退所時の送迎
   note: string;
   createdAt: string;
   rowIdx: number;      // シート上の行（0始まり・内部用）
@@ -151,9 +154,10 @@ function parseRow(row: any[], col: Record<string, number>, rowIdx: number): Rese
     room: Number(cell(row, col['部屋'])) || 0,
     start, end,
     status: cell(row, col['状態']) === '確定' ? '確定' : '仮予約',
-    soutai: parseSoutai(cell(row, col['送迎'])),
     inTime: cell(row, col['入所時間']),
+    soutaiIn: parseSoutai(cell(row, col['入所送迎'])),
     outTime: cell(row, col['退所時間']),
+    soutaiOut: parseSoutai(cell(row, col['退所送迎'])),
     note: cell(row, col['備考']),
     createdAt: cell(row, col['登録日時']),
     rowIdx,
@@ -319,9 +323,10 @@ export interface SaveParams {
   start: string;
   end: string;
   status: ReserveStatus;
-  soutai?: SoutaiKind;
   inTime?: string;
+  soutaiIn?: SoutaiKind;
   outTime?: string;
+  soutaiOut?: SoutaiKind;
   note?: string;
   /**
    * 削除の取り消し用。同じIDの行が見つからなければ、そのIDのまま作り直す。
@@ -383,9 +388,11 @@ export async function saveReservation(p: SaveParams): Promise<string> {
   put('終了日', p.end);
   put('状態', p.status === '確定' ? '確定' : '仮予約');
   // 送迎の有無と入退所の時間は独立。送迎なしでも時間は残す。
-  put('送迎', p.soutai === '家族送迎' ? '家族送迎' : p.soutai === '送迎あり' ? '送迎あり' : '');
+  const soutaiVal = (v?: SoutaiKind) => (v === '家族送迎' ? '家族送迎' : v === '送迎あり' ? '送迎あり' : '');
   put('入所時間', (p.inTime ?? '').trim());
+  put('入所送迎', soutaiVal(p.soutaiIn));
   put('退所時間', (p.outTime ?? '').trim());
+  put('退所送迎', soutaiVal(p.soutaiOut));
   put('備考', (p.note ?? '').trim());
   if (isNewRow) put('登録日時', nowStamp());
 
@@ -424,11 +431,11 @@ export async function deleteReservation(id: string): Promise<Reservation> {
 // その場でしか使えないので、あとから気づいたときはこのシートから拾い直す。
 
 const TRASH_COLS = ['削除日時', '取消', 'ID', '氏名', '棟', '部屋', '開始日', '終了日',
-  '状態', '送迎', '入所時間', '退所時間', '備考', '登録日時'] as const;
+  '状態', '入所時間', '入所送迎', '退所時間', '退所送迎', '備考', '登録日時'] as const;
 
 function trashRowOf(r: Reservation): any[] {
   return [nowStamp(), '', r.id, r.name, r.building, r.room, r.start, r.end,
-    r.status, r.soutai, r.inTime, r.outTime, r.note, r.createdAt];
+    r.status, r.inTime, r.soutaiIn, r.outTime, r.soutaiOut, r.note, r.createdAt];
 }
 
 async function logDeletion(r: Reservation): Promise<void> {
@@ -468,8 +475,10 @@ async function markDeletionUndone(id: string): Promise<void> {
 export interface TrashEntry {
   deletedAt: string; undone: string;
   id: string; name: string; building: string; room: number;
-  start: string; end: string; status: ReserveStatus; soutai: SoutaiKind;
-  inTime: string; outTime: string; note: string;
+  start: string; end: string; status: ReserveStatus;
+  inTime: string; soutaiIn: SoutaiKind;
+  outTime: string; soutaiOut: SoutaiKind;
+  note: string;
 }
 
 export async function listTrash(limit = 50): Promise<TrashEntry[]> {
@@ -494,9 +503,11 @@ export async function listTrash(limit = 50): Promise<TrashEntry[]> {
       start: cell(rows[i], c('開始日')),
       end: cell(rows[i], c('終了日')),
       status: cell(rows[i], c('状態')) === '確定' ? '確定' : '仮予約',
-      soutai: parseSoutai(cell(rows[i], c('送迎'))),
       inTime: cell(rows[i], c('入所時間')),
+      // 分ける前に消したぶんは「送迎」1列だけなので、そこから拾う
+      soutaiIn: parseSoutai(cell(rows[i], c('入所送迎')) || cell(rows[i], c('送迎'))),
       outTime: cell(rows[i], c('退所時間')),
+      soutaiOut: parseSoutai(cell(rows[i], c('退所送迎')) || cell(rows[i], c('送迎'))),
       note: cell(rows[i], c('備考')),
     });
   }
