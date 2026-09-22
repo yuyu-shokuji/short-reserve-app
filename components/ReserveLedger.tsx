@@ -53,10 +53,6 @@ interface Vacancy {
   takenBy?: { name: string; start: string; end: string; status: string }[];
 }
 
-/** 表に出す期間。half は紙の台帳に合わせた前半・後半の2枚。 */
-type RangeKind = 'full' | 'first' | 'second';
-const HALF_AT = 15;                 // 前半は1〜15日、後半は16日〜月末
-const RANGE_LABEL: Record<RangeKind, string> = { full: '1ヶ月', first: '前半', second: '後半' };
 // A3横（余白6mm）の印刷できる範囲。1mm = 96/25.4 px。
 const PRINT_W = 1542, PRINT_H = 1077;
 
@@ -245,14 +241,6 @@ export default function ReserveLedger({ year, month, people }: Props) {
   };
 
   /**
-   * 表に出す期間。いまの紙の台帳が前半・後半の2枚なので、その形と1ヶ月1枚の両方を出せるようにする。
-   * 日数が減るぶん1日あたりの列が広くなる＝氏名が大きく出せる。行数（部屋数）は変わらない。
-   */
-  const [range, setRange] = useState<RangeKind>('full');
-  const dayFrom = range === 'second' ? HALF_AT + 1 : 1;
-  const dayTo = range === 'first' ? Math.min(HALF_AT, daysInMonth) : daysInMonth;
-
-  /**
    * 印刷は台帳（A3横）と予約一覧（A4縦）で紙が違うので、ボタンも別にして押したほうだけ刷る。
    * 用紙の指定は CSS の @page で、状態が画面に反映されてから印刷を呼ぶ必要がある（nonce で1拍おく）。
    */
@@ -401,17 +389,10 @@ export default function ReserveLedger({ year, month, people }: Props) {
           i = j + 1;
         }
       }
-      // 前半・後半に切って出すときは、画面（紙）に出ている範囲の真ん中に置く。
-      // そうしないと、切れ目をまたぐ塊の氏名がもう一方の紙にだけ載って、片方が無名になる。
-      const lo = dayFrom - 1, hi = dayTo - 1;
       type Run = { rv: Reservation; row: number; s: number; e: number };
       /** 上下に隣り合って重なっていれば、同じひとかたまり。斜めだけの接触はつながりと見ない。 */
       const touches = (a: Run, b: Run) => Math.abs(a.row - b.row) === 1 && a.s <= b.e && b.s <= a.e;
-      for (const list of runs.values()) {
-        const seen: Run[] = list
-          .map(x => ({ ...x, s: Math.max(x.s, lo), e: Math.min(x.e, hi) }))
-          .filter(x => x.s <= x.e);
-
+      for (const seen of runs.values()) {
         // 同じ予約でも、食事の無い時間帯で分断されて離れ小島になることがある。
         // 例）1泊2日で16:00入所・09:00退所＝初日の夕と二日目の朝だけ。斜めに離れて枠が2つに割れ、
         //     別の予約に見えてしまう。そこで「氏名は塊に1回」は、離れたかたまりごとに1回とする。
@@ -447,7 +428,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
       map.set(key, days);
     }
     return map;
-  }, [grid, rooms, daysInMonth, year, month, dayFrom, dayTo]);
+  }, [grid, rooms, daysInMonth, year, month]);
 
   /** そのマスで食事をする人。塊の枠はこれを基準に描くので、食事の無いマスは枠から外れる。 */
   const occAt = useCallback((roomKey: string, dayIdx: number, mealIdx: number): Reservation | undefined =>
@@ -739,7 +720,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
 
   const nameKnown = !form?.name.trim() || people.some(p => p.name === form.name.trim());
   // 出す日付（1始まりの日）。マス目そのものは月ぜんぶ持っているので、ここは「どこを見せるか」だけ。
-  const dates = Array.from({ length: Math.max(0, dayTo - dayFrom + 1) }, (_, i) => dayFrom + i);
+  const dates = Array.from({ length: daysInMonth }, (_, i) => i + 1);
   const today = todayISO();
   const formNights = form ? nightsOf(form.start, form.end) : 0;
   const freeList = vacancy?.vacancies.filter(v => v.free) ?? [];
@@ -824,8 +805,9 @@ export default function ReserveLedger({ year, month, people }: Props) {
           .rv-table td.rv-empty.rv-we { background: #f4f4f4 !important; }     /* 土日の空きだけ薄く */
           .rv-table td.rv-empty { color: transparent !important; }            /* 空きマスの「・」は消す */
           .rv-table .rv-time { color: #000 !important; }
-          .rv-table thead th.rv-dayhead { background: #ededed !important; }
-          .rv-table thead th.rv-dayhead.rv-we { background: #d4d4d4 !important; }
+          .rv-table th.rv-dayhead { background: #ededed !important; }
+          .rv-table th.rv-dayhead.rv-we { background: #d4d4d4 !important; }
+          .rv-table tbody tr.rv-daterow th { border-top-color: #4a4a4a !important; border-bottom-color: #9a9a9a !important; }
           .rv-table tbody tr.rv-sum td, .rv-table tbody tr.rv-sum th { background: #ededed !important; }
           /* 部屋と棟の区切りは紙でも分かる濃さに */
           .rv-table tbody tr.rv-roomend td, .rv-table tbody tr.rv-roomend th { border-bottom-color: #9a9a9a !important; }
@@ -845,6 +827,8 @@ export default function ReserveLedger({ year, month, people }: Props) {
           white-space: nowrap; text-align: center; overflow: hidden;
         }
         .rv-table tbody tr.rv-bldend td, .rv-table tbody tr.rv-bldend th { border-bottom: 3px solid #94a3b8; }
+        /* 棟の間に入れる日付行。上下を太めに区切って、表の途中でも日付だと分かるようにする。 */
+        .rv-table tbody tr.rv-daterow th { border-top: 3px solid #94a3b8; border-bottom: 2px solid #cbd5e1; height: 16px; }
         /* 部屋の区切り（朝昼夕の3行が1部屋） */
         .rv-table tbody tr.rv-roomend td, .rv-table tbody tr.rv-roomend th { border-bottom: 2px solid #cbd5e1; }
         /* 予約の塊を枠で囲う。border-collapse と喧嘩しないよう内側の影で描く。
@@ -904,7 +888,6 @@ export default function ReserveLedger({ year, month, people }: Props) {
           <>
             <span className="text-base font-bold">
               メゾン悠遊　ショート予約台帳　{year}年{month}月
-              {range !== 'full' && `（${RANGE_LABEL[range]} ${dayFrom}〜${dayTo}日）`}
             </span>
             <span className="ml-4 text-[10px] font-normal text-gray-600">
               <span className="rv-lg rv-lg-occ" /> 確定 {rows.filter(r => r.status === '確定').length}件
@@ -947,19 +930,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
         )}
         <button onClick={() => openNew(rooms[0]?.building ?? 'さくら', rooms[0]?.room ?? 1, isoOf(year, month, 1))}
           className="ml-auto bg-emerald-500 text-white rounded-lg px-4 py-2 text-sm font-semibold hover:bg-emerald-600">＋ 予約を追加</button>
-        {/* 印刷の単位。いまの紙の台帳が前半・後半の2枚なので、その形と1ヶ月1枚を見比べられるようにする。 */}
-        <span className="inline-flex items-center rounded-lg bg-gray-100 p-0.5 text-xs"
-          title="表に出す期間。前半・後半に分けると1日あたりの幅が広くなり、氏名が大きく出ます。">
-          <span className="px-1.5 text-gray-500">期間</span>
-          {(['full', 'first', 'second'] as const).map(v => (
-            <button key={v} onClick={() => setRange(v)}
-              className={`px-2 py-1 rounded-md font-semibold ${
-                range === v ? 'bg-white shadow text-gray-800' : 'text-gray-500 hover:text-gray-700'}`}>
-              {RANGE_LABEL[v]}
-            </button>
-          ))}
-        </span>
-        {/* 氏名の出し方（現場と相談中。見比べられるよう画面で切り替えられる） */}
+        {/* 氏名の出し方。毎日と塊に1回を両方使うので、切り替えは残す（2026-09-22 現場の結論） */}
         <span className="inline-flex items-center rounded-lg bg-gray-100 p-0.5 text-xs"
           title="チャートに氏名をどう出すか。現場で見比べて決めてください。">
           <span className="px-1.5 text-gray-500">氏名</span>
@@ -1261,24 +1232,79 @@ export default function ReserveLedger({ year, month, people }: Props) {
               </tr>
             </thead>
             <tbody>
-              {buildings.map(b => (
-                <Fragment key={b.name}>
-                  {b.rooms.map((rm, ri) => {
+              {(() => {
+                /**
+                 * 並び順（2026-09-22 現場の結論）
+                 *   日付 → さくら計 → さくら → 日付 → 仮置き01 → すみれ計 → すみれ → 仮置き02 → 空き
+                 * ・日付行を棟の間にも入れる（下のほうで日付を見失わないように）
+                 * ・仮置きを棟の間にも置く（入れ替えのとき遠くまで運ばなくてよいように）
+                 * ・棟の合計は日付行のすぐ下。一番下に置くと日付と見間違えるため。
+                 */
+                const realB = buildings.filter(b => !b.staging);
+                const stagingB = buildings.find(b => b.staging);
+                const stagingRooms = stagingB?.rooms ?? [];
+
+                const bldTh = (name: string, staging: boolean, span: number) => (
+                  <th rowSpan={span} style={{ left: 0 }}
+                    className={`rv-fix px-1 py-1 text-[10px] font-bold ${
+                      staging ? 'bg-slate-200 text-slate-700'
+                        : name === 'さくら' ? 'bg-rose-50 text-rose-700' : 'bg-purple-50 text-purple-700'}`}>{name}</th>
+                );
+
+                /** 棟の間にも入れる日付行。見出しと同じ並びだが、こちらは動かない普通の行。 */
+                const dateRow = (key: string) => (
+                  <tr key={key} className="rv-daterow">
+                    <th colSpan={3} style={{ left: 0 }}
+                      className="rv-fix bg-gray-100 px-1 py-1 text-[10px] text-gray-500 font-semibold">日付</th>
+                    {dates.map(d => {
+                      const w = dowOf(year, month, d);
+                      const isToday = isoOf(year, month, d) === today;
+                      return (
+                        <th key={d} className={`rv-dayhead ${w === '日' || w === '土' ? 'rv-we ' : ''}px-0.5 py-0.5 text-[10px] font-semibold ${
+                          dowColor(w)} ${isToday ? 'bg-emerald-100' : dowBg(w) || 'bg-gray-100'}`}>{d}</th>
+                      );
+                    })}
+                  </tr>
+                );
+
+                /** 棟ごとの利用者数。日付行のすぐ下に置く。 */
+                const sumRow = (b: { name: string; rooms: Room[] }) => (
+                  <tr key={`sum-${b.name}`} className="rv-sum">
+                    <th colSpan={3} style={{ left: 0 }}
+                      className={`rv-fix px-1 py-1 text-[10px] font-bold ${
+                        b.name === 'さくら' ? 'bg-rose-100 text-rose-800' : 'bg-purple-100 text-purple-800'}`}>
+                      {b.name} 計
+                    </th>
+                    {dates.map(d => {
+                      const c = (countsPerBuilding.get(b.name) ?? [])[d - 1] ?? 0;
+                      const w = dowOf(year, month, d);
+                      const full = c >= b.rooms.filter(r => !r.disabled).length;
+                      return (
+                        <td key={d} title={`${mdOf(isoOf(year, month, d))} ${b.name} ${c}名`}
+                          className={`px-0.5 py-1 text-[11px] font-bold ${dowBg(w) || 'bg-gray-50'} ${
+                            !c ? 'text-gray-300' : full ? 'text-red-600' : 'text-emerald-700'}`}>
+                          {c || ''}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+
+                /** 1部屋ぶん（朝昼夕の3行）。棟のどこに置いても同じように描けるように切り出してある。 */
+                const roomRows = (
+                  b: { name: string; staging: boolean },
+                  rm: Room,
+                  o: { bldSpan?: number; endsGroup?: boolean },
+                ) => {
                     const roomKey = `${b.name}-${rm.room}`;
                     const cells = mealGrid.get(roomKey) ?? [];
-                    const isLastRoom = ri === b.rooms.length - 1;
                     return (
                       <Fragment key={roomKey}>
                         {MEAL_ROWS.map((mr, mi) => (
                           <tr key={mr.key}
                             className={`rv-mealrow ${mi === MEAL_ROWS.length - 1 ? 'rv-roomend' : ''} ${
-                              mi === MEAL_ROWS.length - 1 && isLastRoom && b.staging ? 'rv-bldend' : ''}`}>
-                            {ri === 0 && mi === 0 && (
-                              <th rowSpan={b.rooms.length * MEAL_ROWS.length} style={{ left: 0 }}
-                                className={`rv-fix px-1 py-1 text-[10px] font-bold ${
-                                  b.staging ? 'bg-slate-200 text-slate-700'
-                                    : b.name === 'さくら' ? 'bg-rose-50 text-rose-700' : 'bg-purple-50 text-purple-700'}`}>{b.name}</th>
-                            )}
+                              mi === MEAL_ROWS.length - 1 && o.endsGroup ? 'rv-bldend' : ''}`}>
+                            {o.bldSpan && mi === 0 && bldTh(b.name, b.staging, o.bldSpan)}
                             {mi === 0 && (
                               <th rowSpan={MEAL_ROWS.length} style={{ left: OV_W.bld }}
                                 className={`rv-fix px-1 py-1 font-bold rv-roomend ${
@@ -1401,31 +1427,28 @@ export default function ReserveLedger({ year, month, people }: Props) {
                         ))}
                       </Fragment>
                     );
-                  })}
-                  {/* 棟ごとの利用者数（食事管理アプリの全体一覧と同じ見せ方） */}
-                  {!b.staging && (
-                    <tr className="rv-bldend rv-sum">
-                      <th colSpan={3} style={{ left: 0 }}
-                        className={`rv-fix px-1 py-1 text-[10px] font-bold ${
-                          b.name === 'さくら' ? 'bg-rose-100 text-rose-800' : 'bg-purple-100 text-purple-800'}`}>
-                        {b.name} 計
-                      </th>
-                      {dates.map(d => {
-                        const c = (countsPerBuilding.get(b.name) ?? [])[d - 1] ?? 0;
-                        const w = dowOf(year, month, d);
-                        const full = c >= b.rooms.filter(r => !r.disabled).length;
-                        return (
-                          <td key={d} title={`${mdOf(isoOf(year, month, d))} ${b.name} ${c}名`}
-                            className={`px-0.5 py-1 text-[11px] font-bold ${dowBg(w) || 'bg-gray-50'} ${
-                              !c ? 'text-gray-300' : full ? 'text-red-600' : 'text-emerald-700'}`}>
-                            {c || ''}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  )}
-                </Fragment>
-              ))}
+                };
+
+                return (
+                  <>
+                    {realB.map((b, bi) => (
+                      <Fragment key={b.name}>
+                        {bi > 0 && dateRow(`date-${b.name}`)}
+                        {bi > 0 && stagingB && stagingRooms[bi - 1] &&
+                          roomRows(stagingB, stagingRooms[bi - 1], { bldSpan: MEAL_ROWS.length, endsGroup: true })}
+                        {sumRow(b)}
+                        {b.rooms.map((rm, ri) => roomRows(b, rm, {
+                          bldSpan: ri === 0 ? b.rooms.length * MEAL_ROWS.length : undefined,
+                          endsGroup: ri === b.rooms.length - 1,
+                        }))}
+                      </Fragment>
+                    ))}
+                    {/* 棟の間に置ききれなかった仮置きは一番下にまとめる */}
+                    {stagingB && stagingRooms.slice(Math.max(0, realB.length - 1)).map(rm =>
+                      roomRows(stagingB, rm, { bldSpan: MEAL_ROWS.length, endsGroup: true }))}
+                  </>
+                );
+              })()}
               {/* その日の空き部屋数（仮置きは数えない） */}
               <tr className="rv-sum">
                 <th colSpan={3} style={{ left: 0 }} className="rv-fix bg-gray-50 px-1 py-1 text-[10px] text-gray-600 font-bold">空き</th>
