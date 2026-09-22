@@ -17,3 +17,4 @@ service-account-key.json
 
 # このPCだけの権限設定。共有しない
 .claude/settings.local.json
+/out
