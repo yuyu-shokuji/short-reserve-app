@@ -31,25 +31,24 @@ export default function ReserveApp() {
   const isThisMonth = year === now.getFullYear() && month === now.getMonth() + 1;
 
   return (
-    <div className="w-full px-2 py-4 mx-auto space-y-4">
-      <div className="rsv-noprint bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+    // チャートを少しでも広く見せたいので、上の帯は1行に収める
+    <div className="w-full px-2 py-2 mx-auto space-y-2">
+      <div className="rsv-noprint bg-white rounded-xl shadow-sm border border-gray-100 px-3 py-1.5">
         <div className="flex items-center gap-3 justify-between flex-wrap">
-          <div className="flex items-center gap-3">
-            <span className="text-3xl">🛏</span>
-            <div>
-              <h1 className="text-xl font-bold text-gray-800">ショート予約台帳</h1>
-              <p className="text-sm text-gray-500">グラン悠遊</p>
-            </div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-lg">🛏</span>
+            <h1 className="text-base font-bold text-gray-800">ショート予約台帳</h1>
+            <span className="text-xs text-gray-400">グラン悠遊</span>
           </div>
           <div className="flex items-center gap-1">
             <button onClick={() => shiftMonth(-1)}
-              className="px-3 py-2 rounded-lg bg-gray-100 text-gray-700 font-bold hover:bg-gray-200">◀</button>
-            <span className="px-3 font-bold text-gray-800 tabular-nums text-lg">{year}年{month}月</span>
+              className="px-2.5 py-1 rounded-lg bg-gray-100 text-gray-700 font-bold hover:bg-gray-200">◀</button>
+            <span className="px-2 font-bold text-gray-800 tabular-nums">{year}年{month}月</span>
             <button onClick={() => shiftMonth(1)}
-              className="px-3 py-2 rounded-lg bg-gray-100 text-gray-700 font-bold hover:bg-gray-200">▶</button>
+              className="px-2.5 py-1 rounded-lg bg-gray-100 text-gray-700 font-bold hover:bg-gray-200">▶</button>
             {!isThisMonth && (
               <button onClick={() => { setYear(now.getFullYear()); setMonth(now.getMonth() + 1); }}
-                className="ml-2 px-2 py-1 text-xs text-sky-600 underline">今月へ</button>
+                className="ml-2 px-2 py-0.5 text-xs text-sky-600 underline">今月へ</button>
             )}
           </div>
         </div>

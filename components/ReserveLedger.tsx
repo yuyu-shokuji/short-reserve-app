@@ -962,8 +962,8 @@ export default function ReserveLedger({ year, month, people }: Props) {
         )}
       </div>
 
-      <div className="rv-noprint flex items-center gap-3 flex-wrap">
-        <h2 className="text-lg font-bold text-gray-800">{year}年{month}月の予約</h2>
+      <div className="rv-noprint flex items-center gap-2 flex-wrap">
+        <h2 className="text-base font-bold text-gray-800">{year}年{month}月の予約</h2>
         <span className="text-sm text-gray-500">
           確定 {rows.filter(r => r.status === '確定').length}件 ／ 仮予約 {rows.filter(r => r.status === '仮予約').length}件
         </span>
@@ -977,18 +977,18 @@ export default function ReserveLedger({ year, month, people }: Props) {
         {lastDelete && (
           <button disabled={busy} onClick={() => restoreDeleted()}
             title={`${lastDelete.name} さん ${lastDelete.building}${pad2(lastDelete.room)}号 ${lastDelete.start}〜${lastDelete.end}`}
-            className="rounded-lg bg-red-600 text-white px-3 py-2 text-sm font-bold hover:bg-red-700 disabled:opacity-40">
+            className="rounded-lg bg-red-600 text-white px-2.5 py-1.5 text-sm font-bold hover:bg-red-700 disabled:opacity-40">
             ↩ 削除を取り消す（{lastDelete.name}）
           </button>
         )}
         {lastMove && (
           <button disabled={busy} onClick={doUndoMove}
-            className="rounded-lg bg-amber-500 text-white px-3 py-2 text-sm font-bold hover:bg-amber-600 disabled:opacity-40">
+            className="rounded-lg bg-amber-500 text-white px-2.5 py-1.5 text-sm font-bold hover:bg-amber-600 disabled:opacity-40">
             ↩ 直前の移動を戻す
           </button>
         )}
         <button onClick={() => openNew(rooms[0]?.building ?? 'さくら', rooms[0]?.room ?? 1, isoOf(year, month, 1))}
-          className="ml-auto bg-emerald-500 text-white rounded-lg px-4 py-2 text-sm font-semibold hover:bg-emerald-600">＋ 予約を追加</button>
+          className="ml-auto bg-emerald-500 text-white rounded-lg px-3 py-1.5 text-sm font-semibold hover:bg-emerald-600">＋ 予約を追加</button>
         {/* 氏名の出し方。毎日と塊に1回を両方使うので、切り替えは残す（2026-09-22 現場の結論） */}
         <span className="inline-flex items-center rounded-lg bg-gray-100 p-0.5 text-xs"
           title="チャートに氏名をどう出すか。現場で見比べて決めてください。">
@@ -1002,11 +1002,11 @@ export default function ReserveLedger({ year, month, people }: Props) {
           ))}
         </span>
         <button onClick={() => { const open = !trashOpen; setTrashOpen(open); if (open) loadTrash(); }}
-          className={`rounded-lg px-3 py-2 text-sm font-semibold ${trashOpen ? 'bg-slate-600 text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}>
+          className={`rounded-lg px-2.5 py-1.5 text-sm font-semibold ${trashOpen ? 'bg-slate-600 text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}>
           🗑 削除の履歴
         </button>
-        <button onClick={() => doPrint('chart')} className="bg-sky-500 text-white rounded-lg px-3 py-2 text-sm font-semibold hover:bg-sky-600">🖨 台帳を印刷（A3横）</button>
-        <button onClick={() => doPrint('list')} className="bg-sky-100 text-sky-800 rounded-lg px-3 py-2 text-sm font-semibold hover:bg-sky-200">🖨 一覧を印刷（A4縦）</button>
+        <button onClick={() => doPrint('chart')} className="bg-sky-500 text-white rounded-lg px-2.5 py-1.5 text-sm font-semibold hover:bg-sky-600">🖨 台帳を印刷（A3横）</button>
+        <button onClick={() => doPrint('list')} className="bg-sky-100 text-sky-800 rounded-lg px-2.5 py-1.5 text-sm font-semibold hover:bg-sky-200">🖨 一覧を印刷（A4縦）</button>
         {/* 入浴・洗濯管理表。日曜はじまりの1週間ぶんを Excel で落とす。 */}
         <span className="inline-flex items-center gap-1 rounded-lg bg-teal-50 border border-teal-200 px-2 py-1"
           title="選んだ週の入浴・洗濯管理表を Excel で作ります。">
@@ -1020,7 +1020,7 @@ export default function ReserveLedger({ year, month, people }: Props) {
             Excelを作る
           </button>
         </span>
-        <button onClick={() => load()} className="bg-gray-200 text-gray-700 rounded-lg px-3 py-2 text-sm font-semibold">🔄 更新</button>
+        <button onClick={() => load()} className="bg-gray-200 text-gray-700 rounded-lg px-2.5 py-1.5 text-sm font-semibold">🔄 更新</button>
       </div>
 
       {/* 削除の履歴。消した予約は消さずに「削除ログ」シートへ積んであるので、あとからでも戻せる。 */}
@@ -1066,6 +1066,10 @@ export default function ReserveLedger({ year, month, people }: Props) {
         </div>
       )}
 
+      {/* お知らせ・警告の置き場。
+          高さを固定しておく（中でスクロール）。出たり消えたりで下のチャートが
+          上下にずれると、掴んでいたマスを見失うため。 */}
+      <div className="rv-noprint h-[68px] shrink-0 overflow-y-auto space-y-1.5">
       {/* ドラッグ中の行き先を文字でも出す（マスが小さいので取り違え防止） */}
       {drag && preview && (
         <div className="rv-noprint rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-sm text-sky-900 font-medium">
@@ -1102,23 +1106,27 @@ export default function ReserveLedger({ year, month, people }: Props) {
         </div>
       )}
 
-      {/* 書こうとしたら重なっていたときの確認（移動・削除の取り消しで共用） */}
+      </div>
+
+      {/* 書こうとしたら重なっていたときの確認（移動・削除の取り消しで共用）。
+          答えるまで残るものなので、チャートを押し下げないよう浮かせて出す。
+          ボタンは見出しのすぐ下＝長い一覧でもスクロールせずに押せる位置に置く。 */}
       {ask && (
-        <div className="rv-noprint rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 space-y-2">
+        <div className="rv-noprint fixed inset-x-0 top-24 z-50 mx-auto w-[min(48rem,92vw)] rounded-xl border border-amber-300 bg-amber-50 shadow-xl px-4 py-3 text-sm text-amber-900 space-y-2">
           <div className="font-bold">⚠ {ask.title}</div>
-          <ul className="list-disc pl-5 max-h-32 overflow-y-auto">
-            {ask.conflicts.map((c, i) => (
-              <li key={i}>
-                <ConflictLine c={c} />
-              </li>
-            ))}
-          </ul>
           <div className="flex items-center gap-2 flex-wrap">
             <button disabled={busy} onClick={ask.onConfirm}
               className="px-3 py-1.5 rounded-lg bg-red-600 text-white font-bold hover:bg-red-700 disabled:opacity-40">{ask.confirmLabel}</button>
             <button disabled={busy} onClick={() => setAsk(null)} className="px-2 py-1.5 text-amber-700 underline">やめる</button>
             <span className="text-xs text-amber-700">※ 入れ替えたいときは、先に片方を「仮置き」へ逃がしてください</span>
           </div>
+          <ul className="list-disc pl-5 max-h-40 overflow-y-auto">
+            {ask.conflicts.map((c, i) => (
+              <li key={i}>
+                <ConflictLine c={c} />
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
