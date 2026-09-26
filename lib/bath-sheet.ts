@@ -31,7 +31,19 @@ const solid = (argb: string) => ({ type: 'pattern', pattern: 'solid', fgColor: {
 const thin = { style: 'thin', color: { argb: 'FF808080' } } as const;
 const med = { style: 'medium', color: { argb: 'FF404040' } } as const;
 
-interface Row { name: string; building: string; room: number; start: string; end: string; status: string; }
+/**
+ * 表の1行ぶん。
+ * ⚠️ 同じユニットの同じ人は、週のうちに何回かに分かれて泊まっても1行にまとめる
+ *    （現場の指定。前北様のように週の前半と後半で分かれて入る方がいるため）。
+ *    ユニットが違えば別の行にする（さくらとすみれの両方に入る方がいるため）。
+ */
+interface Row {
+  name: string;
+  building: string;
+  order: number;                                  // 並び順（最初に入った部屋の位置）
+  spans: { start: string; end: string }[];        // 泊まっている期間（複数あることがある）
+  end: string;                                    // いちばん遅い終了日
+}
 
 /** その週にかかる予約を、表に出す順に並べて返す。 */
 async function weekRows(weekStart: string, weekEnd: string): Promise<Row[]> {
@@ -54,22 +66,41 @@ async function weekRows(weekStart: string, weekEnd: string): Promise<Row[]> {
 
   const resRows = data[SHEET.reserve] ?? [];
   const ph = head(resRows);
-  return resRows.slice(1)
+  const stays = resRows.slice(1)
     .map(r => ({
       name: cell(r, ph.indexOf('氏名')),
       building: cell(r, ph.indexOf('棟')),
       room: Number(r[ph.indexOf('部屋')]),
       start: cell(r, ph.indexOf('開始日')),
       end: cell(r, ph.indexOf('終了日')),
-      status: cell(r, ph.indexOf('状態')),
     }))
     .filter(r => r.name && r.start && r.end)
     .filter(r => r.start <= weekEnd && r.end >= weekStart)
     .filter(r => roomOrder.has(`${r.building}-${r.room}`))
-    .sort((a, b) =>
-      (buildingOrder.get(a.building) ?? 99) - (buildingOrder.get(b.building) ?? 99)
-      || a.room - b.room
-      || a.start.localeCompare(b.start));
+    .sort((a, b) => a.start.localeCompare(b.start));
+
+  // ユニット＋氏名でまとめる
+  const byPerson = new Map<string, Row>();
+  for (const s of stays) {
+    const key = `${s.building}|${s.name}`;
+    const cur = byPerson.get(key);
+    if (cur) {
+      cur.spans.push({ start: s.start, end: s.end });
+      if (s.end > cur.end) cur.end = s.end;
+    } else {
+      byPerson.set(key, {
+        name: s.name, building: s.building,
+        order: roomOrder.get(`${s.building}-${s.room}`) ?? 9999,
+        spans: [{ start: s.start, end: s.end }],
+        end: s.end,
+      });
+    }
+  }
+
+  return [...byPerson.values()].sort((a, b) =>
+    (buildingOrder.get(a.building) ?? 99) - (buildingOrder.get(b.building) ?? 99)
+    || a.order - b.order
+    || a.spans[0].start.localeCompare(b.spans[0].start));
 }
 
 export interface BathSheet { buffer: Buffer; filename: string; weekStart: string; count: number; }
@@ -144,12 +175,26 @@ export async function buildBathSheet(day: string): Promise<BathSheet> {
   ws.getRow(HEAD + 2).height = 16;
 
   const FIRST = HEAD + 3;
-  rows.forEach((rv, i) => {
-    const r = FIRST + i;
-    ws.getRow(r).height = 19;
+  let r = FIRST;
+  const bodyRows: number[] = [];          // 罫線を引く行（空行は除く）
+  const spacerRows: number[] = [];        // ユニットの区切りの空行
+  let prevBuilding = '';
 
+  for (const rv of rows) {
+    // ユニットが変わったら1行あける（現場の指定。さくらとすみれの境が分かるように）
+    if (prevBuilding && rv.building !== prevBuilding) {
+      ws.getRow(r).height = 7;
+      spacerRows.push(r);
+      r++;
+    }
+    prevBuilding = rv.building;
+
+    ws.getRow(r).height = 19;
+    bodyRows.push(r);
+
+    // ⚠️ 部屋番号は出さない。ユニット名だけ（現場の指定）。
     const unit = ws.getCell(r, 2);
-    unit.value = `${rv.building}${pad2(rv.room)}`;
+    unit.value = rv.building;
     unit.font = { name: FONT, size: 10 };
     unit.alignment = { horizontal: 'center', vertical: 'middle' };
     unit.fill = solid(GRAY.head);
@@ -159,34 +204,70 @@ export async function buildBathSheet(day: string): Promise<BathSheet> {
     nm.font = { name: FONT, size: 11 };
     nm.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
 
-    for (let i2 = 0; i2 < 7; i2++) {
-      const day = isoOf(days[i2]);
-      const staying = day >= rv.start && day <= rv.end;
+    for (let i = 0; i < 7; i++) {
+      const day = isoOf(days[i]);
+      const staying = rv.spans.some(s => day >= s.start && day <= s.end);
       for (const kind of ['bath', 'wash'] as const) {
-        const c = ws.getCell(r, colOf(i2, kind));
+        const c = ws.getCell(r, colOf(i, kind));
         c.font = { name: FONT, size: 12 };
         c.alignment = { horizontal: 'center', vertical: 'middle' };
         if (staying) c.fill = solid(kind === 'bath' ? GRAY.bath : GRAY.wash);
       }
     }
 
-    // 期間＝滞在予定の最終日。
-    // ⚠️ exceljs は Date を UTC として書くので、地元時間の Date を渡すと1日前になる。
+    // 期間＝滞在予定の最終日。⚠️ 土曜まで残る人だけに入れる（現場の指定）。
+    // 週の途中で帰る人は、塗りが途切れるところで分かるので書かない。
     const ed = ws.getCell(r, LAST);
-    const [ey, em, edd] = rv.end.split('-').map(Number);
-    ed.value = new Date(Date.UTC(ey, em - 1, edd));
-    ed.numFmt = 'm"月"d"日"';
+    if (rv.end >= weekEnd) {
+      const [ey, em, edd] = rv.end.split('-').map(Number);
+      // ⚠️ exceljs は Date を UTC として書くので、地元時間の Date を渡すと1日前になる。
+      ed.value = new Date(Date.UTC(ey, em - 1, edd));
+      ed.numFmt = 'm"月"d"日"';
+    }
     ed.font = { name: FONT, size: 10 };
     ed.alignment = { horizontal: 'center', vertical: 'middle' };
     ed.fill = solid(GRAY.head);
-  });
+    r++;
+  }
+
+  // 入浴者数（現場の要望）。記号は手入力なので、数えるのは式にまかせる。
+  // ☆＝機械浴、それ以外の印（◎○△）＝個浴。
+  const DATA_TOP = FIRST, DATA_BOTTOM = Math.max(r - 1, FIRST);
+  const totalRows: { label: string; formula: (col: string) => string }[] = [
+    { label: '入浴者数　個浴', formula: (c) => `COUNTA(${c}${DATA_TOP}:${c}${DATA_BOTTOM})-COUNTIF(${c}${DATA_TOP}:${c}${DATA_BOTTOM},"☆")-COUNTIF(${c}${DATA_TOP}:${c}${DATA_BOTTOM},"★")` },
+    { label: '入浴者数　機浴', formula: (c) => `COUNTIF(${c}${DATA_TOP}:${c}${DATA_BOTTOM},"☆")+COUNTIF(${c}${DATA_TOP}:${c}${DATA_BOTTOM},"★")` },
+  ];
+  ws.getRow(r).height = 7;
+  spacerRows.push(r);
+  r++;
+  const totalAt: number[] = [];
+  for (const t of totalRows) {
+    ws.getRow(r).height = 19;
+    totalAt.push(r);
+    ws.mergeCells(r, 2, r, 3);
+    const lb = ws.getCell(r, 2);
+    lb.value = t.label;
+    lb.font = { name: FONT, size: 10, bold: true };
+    lb.alignment = { horizontal: 'center', vertical: 'middle' };
+    lb.fill = solid(GRAY.head);
+    for (let i = 0; i < 7; i++) {
+      const col = ws.getColumn(colOf(i, 'bath')).letter;
+      const c = ws.getCell(r, colOf(i, 'bath'));
+      c.value = { formula: t.formula(col) } as any;
+      c.font = { name: FONT, size: 11, bold: true };
+      c.alignment = { horizontal: 'center', vertical: 'middle' };
+      const w = ws.getCell(r, colOf(i, 'wash'));
+      w.fill = solid(GRAY.head);
+    }
+    ws.getCell(r, LAST).fill = solid(GRAY.head);
+    r++;
+  }
 
   // 罫線。日の変わり目だけ太くして、どこまでが同じ日か分かるようにする。
-  const LASTROW = FIRST + Math.max(rows.length, 1) - 1;
-  for (let r = HEAD; r <= LASTROW; r++) {
+  for (const rr of [...Array.from({ length: HEAD + 3 - HEAD }, (_, i) => HEAD + i), ...bodyRows, ...totalAt]) {
     for (let c = 2; c <= LAST; c++) {
       const dayStart = c >= DAY0 && c < DAY0 + 14 && (c - DAY0) % 2 === 0;
-      ws.getCell(r, c).border = {
+      ws.getCell(rr, c).border = {
         top: thin, bottom: thin,
         left: (dayStart || c === DAY0 + 14) ? med : thin,
         right: c === LAST ? med : thin,
