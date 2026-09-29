@@ -201,9 +201,19 @@ interface TrashEntry {
   inTime: string; soutaiIn: SoutaiKind; outTime: string; soutaiOut: SoutaiKind; note: string;
 }
 
-interface Props { year: number; month: number; people: Person[]; }
+/** 上の帯に出す集計。件数と稼働率はここで数えているので、親へ渡して1行に並べる。 */
+export interface LedgerSummary {
+  confirmed: number; tentative: number;
+  pct: number | null; used: number; total: number;
+  rooms: number; days: number;
+}
 
-export default function ReserveLedger({ year, month, people }: Props) {
+interface Props {
+  year: number; month: number; people: Person[];
+  onSummary?: (s: LedgerSummary | null) => void;
+}
+
+export default function ReserveLedger({ year, month, people, onSummary }: Props) {
   const [rows, setRows] = useState<Reservation[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [daysInMonth, setDaysInMonth] = useState(new Date(year, month, 0).getDate());
@@ -835,6 +845,20 @@ export default function ReserveLedger({ year, month, people }: Props) {
     } finally { setBusy(false); }
   };
 
+  // 件数と稼働率を上の帯へ渡す（読み込み中は出さない）
+  useEffect(() => {
+    if (!onSummary) return;
+    onSummary(loading ? null : {
+      confirmed: rows.filter(r => r.status === '確定').length,
+      tentative: rows.filter(r => r.status === '仮予約').length,
+      pct: occupancy?.pct ?? null,
+      used: occupancy?.used ?? 0,
+      total: occupancy?.total ?? 0,
+      rooms: realRooms.length,
+      days: daysInMonth,
+    });
+  }, [onSummary, loading, rows, occupancy, realRooms.length, daysInMonth]);
+
   const printChart = printWhat === 'chart';
   const printBody = PRINT_H - 44;   // 見出し1行ぶんを空けておく
   const printZoom = chartH > printBody ? Math.max(0.5, Math.floor((printBody / chartH) * 100) / 100) : 1;
@@ -991,18 +1015,8 @@ export default function ReserveLedger({ year, month, people }: Props) {
         )}
       </div>
 
+      {/* 件数と稼働率は上の帯（ReserveApp）へ渡して、タイトル・月選びと1行に並べている。 */}
       <div className="rv-noprint flex items-center gap-2 flex-wrap">
-        <h2 className="text-base font-bold text-gray-800">{year}年{month}月の予約</h2>
-        <span className="text-sm text-gray-500">
-          確定 {rows.filter(r => r.status === '確定').length}件 ／ 仮予約 {rows.filter(r => r.status === '仮予約').length}件
-        </span>
-        {occupancy && (
-          <span className="text-sm font-bold text-indigo-700"
-            title={`埋まっていた ${occupancy.used} 室日 ÷ ${realRooms.length}室 × ${daysInMonth}日 = ${occupancy.total} 室日`}>
-            稼働率 {occupancy.pct}%
-            <span className="ml-1 font-normal text-xs text-gray-400">（{occupancy.used}/{occupancy.total} 室日）</span>
-          </span>
-        )}
         {lastDelete && (
           <button disabled={busy} onClick={() => restoreDeleted()}
             title={`${lastDelete.name} さん ${lastDelete.building}${pad2(lastDelete.room)}号 ${lastDelete.start}〜${lastDelete.end}`}
