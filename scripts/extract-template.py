@@ -4,7 +4,7 @@
 # 見本をそのまま型として持ち、日付と氏名だけ差し替える作りにする。
 #
 #   python extract-template.py <xlsx> <開始行> <行数> <列数> <出力json>
-import sys, json
+import sys, json, datetime
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter as L
 
@@ -90,7 +90,14 @@ for r in range(top, top + nrows):
             continue
         item = {"r": r - top + 1, "c": c}
         if v is not None:
-            item["v"] = v if isinstance(v, (int, float)) else str(v)
+            # ⚠️ 時刻は datetime.time で入っていて、そのまま str にすると "00:00:00" になる。
+            #    様式の表示形式は h:mm なので、見たとおりの "0:00" にして持つ。
+            if isinstance(v, datetime.time):
+                item["v"] = f"{v.hour}:{v.minute:02d}"
+            elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                item["v"] = v
+            else:
+                item["v"] = str(v)
         if st:
             item["s"] = style_id(st)
         cells.append(item)
@@ -106,10 +113,13 @@ for r in range(top, top + nrows):
     if h:
         rowh[str(r - top + 1)] = float(h)
 
+# ⚠️ 列幅は <col min="5" max="8" width="5.4"/> のようにまとめて指定されていることがある。
+#    キー（先頭列）だけ見ると残りが既定幅になって、表が横に伸びる。min〜max に広げる。
 colw = {}
-for c in range(1, ncols + 1):
-    d = ws.column_dimensions.get(L(c))
-    if d and d.width:
+for d in ws.column_dimensions.values():
+    if not d.width:
+        continue
+    for c in range(d.min, min(d.max, ncols) + 1):
         colw[str(c)] = float(d.width)
 
 ps = ws.page_setup
@@ -126,6 +136,7 @@ page = {
 }
 
 data = {"rows": nrows, "cols": ncols, "rowHeights": rowh, "colWidths": colw,
+        "defaultRowHeight": float(ws.sheet_format.defaultRowHeight or 13),
         "merges": merges, "styles": styles, "cells": cells, "page": page}
 with open(out, "w", encoding="utf-8") as fp:
     json.dump(data, fp, ensure_ascii=False, separators=(",", ":"))

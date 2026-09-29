@@ -18,6 +18,7 @@ interface Template {
   rows: number; cols: number;
   rowHeights: Record<string, number>;
   colWidths: Record<string, number>;
+  defaultRowHeight?: number;
   merges: number[][];
   styles: any[];
   cells: { r: number; c: number; v?: string | number; s?: number }[];
@@ -30,6 +31,7 @@ const FORMS = {
     tpl: rec1 as unknown as Template,
     label: '記録表①',
     date: { year: 11, month: 13, day: 15, dow: 17 },   // K / M / O / Q
+    dayFmt: '',                                        // ①は「日」のセルが別にある
     roomRows: [5, 8, 11, 14, 17, 20, 23, 26, 29, 32],
     colRoom: 2, colName: 3, colVisit: 33,              // B / C / AG
   },
@@ -37,6 +39,7 @@ const FORMS = {
     tpl: rec2 as unknown as Template,
     label: '記録表②',
     date: { year: 11, month: 13, day: 15, dow: 16 },   // K / M / O / P
+    dayFmt: '0"日"',                                   // ②は「日」のセルが無いので表示形式で出す
     roomRows: [5, 9, 13, 17, 21, 25, 29, 33, 37, 41],
     colRoom: 2, colName: 3, colVisit: 0,               // ②に来所帰所の欄は無い
   },
@@ -107,6 +110,7 @@ export async function buildRecordSheet(day: string, form: FormKey): Promise<Reco
     },
   });
 
+  if (t.defaultRowHeight) ws.properties.defaultRowHeight = t.defaultRowHeight;
   for (const [c, w] of Object.entries(t.colWidths)) ws.getColumn(Number(c)).width = w;
 
   let filled = 0;
@@ -125,7 +129,10 @@ export async function buildRecordSheet(day: string, form: FormKey): Promise<Reco
     // 日付
     ws.getCell(off + 1, f.date.year).value = `${y}年`;
     ws.getCell(off + 1, f.date.month).value = m;
-    ws.getCell(off + 1, f.date.day).value = d;
+    const dc = ws.getCell(off + 1, f.date.day);
+    dc.value = d;
+    if (f.dayFmt) dc.numFmt = f.dayFmt;
+    // 曜日の括弧は見本で全角と半角が混ざっていた（手作業の名残）。全角にそろえる。
     ws.getCell(off + 1, f.date.dow).value = `（${dow}）`;
 
     // 居室と利用者
