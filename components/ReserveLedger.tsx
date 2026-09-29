@@ -855,7 +855,8 @@ export default function ReserveLedger({ year, month, people, nameMode, onSummary
   const printTableW = Math.round((PRINT_W - 2) / printZoom);
 
   return (
-    <div className="rv-print space-y-4">
+    // 上の帯とチャートの間を詰める（表を少しでも広く見せる）
+    <div className="rv-print space-y-1.5">
       <style>{`
         @media print {
           /* 台帳（A3横1枚）と一覧（A4縦）は別々に刷る。押したボタンで用紙ごと切り替える。 */
@@ -1021,7 +1022,7 @@ export default function ReserveLedger({ year, month, people, nameMode, onSummary
           </button>
         )}
         <button onClick={() => openNew(rooms[0]?.building ?? 'さくら', rooms[0]?.room ?? 1, isoOf(year, month, 1))}
-          className="ml-auto bg-emerald-500 text-white rounded-lg px-3 py-1.5 text-sm font-semibold hover:bg-emerald-600">＋ 予約を追加</button>
+          className="bg-emerald-500 text-white rounded-lg px-3 py-1.5 text-sm font-semibold hover:bg-emerald-600">＋ 予約を追加</button>
         {/* 表示方式の切り替えは上の帯（ReserveApp）へ移した */}
         <button onClick={() => { const open = !trashOpen; setTrashOpen(open); if (open) loadTrash(); }}
           className={`rounded-lg px-2.5 py-1.5 text-sm font-semibold ${trashOpen ? 'bg-slate-600 text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}>

@@ -49,15 +49,14 @@ export default function ReserveApp() {
   const isThisMonth = year === now.getFullYear() && month === now.getMonth() + 1;
 
   return (
-    // チャートを少しでも広く見せたいので、上の帯は1行に収める
-    <div className="w-full px-2 py-2 mx-auto space-y-2">
+    // チャートを少しでも広く見せたいので、上の帯は1行に収めて余白も詰める
+    <div className="w-full px-2 py-1.5 mx-auto space-y-1.5">
       <div className="rsv-noprint bg-white rounded-xl shadow-sm border border-gray-100 px-3 py-1.5">
         {/* 左から タイトル → 月選び → その月の予約情報 の順に1行で並べる（現場の指定） */}
         <div className="flex items-center gap-x-5 gap-y-1 flex-wrap">
           <div className="flex items-baseline gap-2">
             <span className="text-lg">🛏</span>
             <h1 className="text-base font-bold text-gray-800">ショート予約台帳</h1>
-            <span className="text-xs text-gray-400">グラン悠遊</span>
           </div>
           <div className="flex items-center gap-1">
             <button onClick={() => shiftMonth(-1)} aria-label="前の月"
