@@ -31,21 +31,30 @@ const FORMS = {
     tpl: rec1 as unknown as Template,
     label: '記録表①',
     date: { year: 11, month: 13, day: 15, dow: 17 },   // K / M / O / Q
-    dayFmt: '',                                        // ①は「日」のセルが別にある
+    dayUnit: 0,                                        // ①は「日」のセルがひな形にある
     roomRows: [5, 8, 11, 14, 17, 20, 23, 26, 29, 32],
     colRoom: 2, colName: 3, colVisit: 33,              // B / C / AG
   },
   '2': {
     tpl: rec2 as unknown as Template,
     label: '記録表②',
-    date: { year: 11, month: 13, day: 15, dow: 16 },   // K / M / O / P
-    dayFmt: '0"日"',                                   // ②は「日」のセルが無いので表示形式で出す
+    // ⚠️ ②のひな形には「日」のセルが無い（K年 M月数字 N月 O日数字 P曜日）。
+    //    表示形式で「22日」と出すと列が狭くて ### になるので、P に「日」を入れて
+    //    曜日を Q へ1つずらす。①と同じ並びになる。
+    date: { year: 11, month: 13, day: 15, dow: 17 },   // K / M / O / Q（ずらしたあと）
+    dayUnit: 16,                                       // P に「日」を足す
     roomRows: [5, 9, 13, 17, 21, 25, 29, 33, 37, 41],
     colRoom: 2, colName: 3, colVisit: 0,               // ②に来所帰所の欄は無い
   },
 } as const;
 
 export type FormKey = keyof typeof FORMS;
+
+/** ひな形のそのマスの見た目。無ければ空。 */
+function tplStyle(t: Template, r: number, c: number) {
+  const cl = t.cells.find(x => x.r === r && x.c === c);
+  return cl?.s !== undefined ? t.styles[cl.s] : {};
+}
 
 /** その日、どの部屋に誰がいるか。棟 → 部屋番号 → 予約。 */
 async function occupantsOf(day: string) {
@@ -100,15 +109,24 @@ export async function buildRecordSheet(day: string, form: FormKey): Promise<Reco
   const dow = WD[new Date(y, m - 1, d).getDay()];
   const { units, by } = await occupantsOf(day);
 
+  // ⚠️ 印刷は見本のまま（等倍）。「ページに合わせる」を付けると縮んで行が低くなり、
+  //    棟ごとに1枚へきれいに分かれなくなる。
+  const pageSetup: any = {
+    orientation: t.page.orientation,
+    paperSize: t.page.paperSize,
+    margins: t.page.margins,
+  };
+  if (t.page.fitToPage) {
+    pageSetup.fitToPage = true;
+    if (t.page.fitToWidth != null) pageSetup.fitToWidth = t.page.fitToWidth;
+    if (t.page.fitToHeight != null) pageSetup.fitToHeight = t.page.fitToHeight;
+  } else if (t.page.scale) {
+    pageSetup.scale = t.page.scale;
+  }
+
   const wb = new ExcelJS.Workbook();
   wb.creator = 'グラン悠遊 ショート予約台帳';
-  const ws = wb.addWorksheet(`${m}月${d}日`, {
-    pageSetup: {
-      orientation: t.page.orientation, paperSize: t.page.paperSize,
-      fitToPage: true, fitToWidth: t.page.fitToWidth, fitToHeight: t.page.fitToHeight,
-      margins: t.page.margins,
-    },
-  });
+  const ws = wb.addWorksheet(`${m}月${d}日`, { pageSetup });
 
   if (t.defaultRowHeight) ws.properties.defaultRowHeight = t.defaultRowHeight;
   for (const [c, w] of Object.entries(t.colWidths)) ws.getColumn(Number(c)).width = w;
@@ -129,9 +147,15 @@ export async function buildRecordSheet(day: string, form: FormKey): Promise<Reco
     // 日付
     ws.getCell(off + 1, f.date.year).value = `${y}年`;
     ws.getCell(off + 1, f.date.month).value = m;
-    const dc = ws.getCell(off + 1, f.date.day);
-    dc.value = d;
-    if (f.dayFmt) dc.numFmt = f.dayFmt;
+    ws.getCell(off + 1, f.date.day).value = d;
+    if (f.dayUnit) {
+      // 「日」はひな形の「月」と同じ見た目、曜日はひな形の曜日セルの見た目を引き継ぐ
+      const u = ws.getCell(off + 1, f.dayUnit);
+      u.value = '日';
+      u.style = { ...(tplStyle(t, 1, f.date.month + 1) as any) };
+      const w = ws.getCell(off + 1, f.date.dow);
+      w.style = { ...(tplStyle(t, 1, f.dayUnit) as any) };
+    }
     // 曜日の括弧は見本で全角と半角が混ざっていた（手作業の名残）。全角にそろえる。
     ws.getCell(off + 1, f.date.dow).value = `（${dow}）`;
 
@@ -147,6 +171,9 @@ export async function buildRecordSheet(day: string, form: FormKey): Promise<Reco
       if (o) filled++;
       if (f.colVisit) ws.getCell(r, f.colVisit).value = visitLabel(day, o) || null;
     });
+
+    // 棟の切れ目で改ページ。1枚に1棟ずつ刷れるようにする。
+    if (ui < units.length - 1) ws.getRow(off + t.rows).addPageBreak();
   });
 
   const buf = await wb.xlsx.writeBuffer();

@@ -123,11 +123,16 @@ for d in ws.column_dimensions.values():
         colw[str(c)] = float(d.width)
 
 ps = ws.page_setup
+# ⚠️ 「ページに合わせる」を勝手に付けないこと。見本は等倍で、付けると縮んで
+#    行が低くなり、2枚にきれいに分かれなくなる（2026-09-29に実際にそうなった）。
+pup = ws.sheet_properties.pageSetUpPr
 page = {
     "orientation": ps.orientation or "portrait",
     "paperSize": int(ps.paperSize) if ps.paperSize else 9,
-    "fitToWidth": int(ps.fitToWidth) if ps.fitToWidth else 1,
-    "fitToHeight": int(ps.fitToHeight) if ps.fitToHeight is not None else 0,
+    "fitToPage": bool(pup.fitToPage) if pup else False,
+    "fitToWidth": int(ps.fitToWidth) if ps.fitToWidth else None,
+    "fitToHeight": int(ps.fitToHeight) if ps.fitToHeight is not None else None,
+    "scale": int(ps.scale) if ps.scale else None,
     "margins": {
         "left": float(ws.page_margins.left), "right": float(ws.page_margins.right),
         "top": float(ws.page_margins.top), "bottom": float(ws.page_margins.bottom),
