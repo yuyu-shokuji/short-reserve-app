@@ -218,10 +218,12 @@ export interface LedgerSummary {
 interface Props {
   year: number; month: number; people: Person[];
   nameMode: NameMode;
+  /** 上の帯の「更新」を押すと増える。増えたら読み直す。 */
+  reloadKey?: number;
   onSummary?: (s: LedgerSummary | null) => void;
 }
 
-export default function ReserveLedger({ year, month, people, nameMode, onSummary }: Props) {
+export default function ReserveLedger({ year, month, people, nameMode, reloadKey, onSummary }: Props) {
   const [rows, setRows] = useState<Reservation[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [daysInMonth, setDaysInMonth] = useState(new Date(year, month, 0).getDate());
@@ -290,10 +292,11 @@ export default function ReserveLedger({ year, month, people, nameMode, onSummary
     } finally { if (!silent) setLoading(false); }
   }, [year, month]);
 
+  // 月が変わったとき、および上の帯の「更新」を押したとき（reloadKey が増える）に読み直す
   useEffect(() => {
     setForm(null); setConflicts(null); setMsg(''); setAsk(null); setLastMove(null); setLastDelete(null);
     load();
-  }, [load]);
+  }, [load, reloadKey]);
 
   // 建物ごとの部屋（部屋シートの並びを尊重する）。仮置きは最後にまとまる。
   const buildings = useMemo(() => {
@@ -1009,14 +1012,14 @@ export default function ReserveLedger({ year, month, people, nameMode, onSummary
       {/* 件数と稼働率は上の帯（ReserveApp）へ渡して、タイトル・月選びと1行に並べている。 */}
       <div className="rv-noprint flex items-center gap-2 flex-wrap">
         <button onClick={() => openNew(rooms[0]?.building ?? 'さくら', rooms[0]?.room ?? 1, isoOf(year, month, 1))}
-          className="bg-emerald-500 text-white rounded-lg px-3 py-1.5 text-sm font-semibold hover:bg-emerald-600">＋ 予約を追加</button>
+          className="bg-emerald-500 text-white rounded-lg px-3 py-1.5 text-sm font-semibold hover:bg-emerald-600">＋ 予約追加</button>
         {/* 表示方式の切り替えは上の帯（ReserveApp）へ移した */}
         <button onClick={() => { const open = !trashOpen; setTrashOpen(open); if (open) loadTrash(); }}
           className={`rounded-lg px-2.5 py-1.5 text-sm font-semibold ${trashOpen ? 'bg-slate-600 text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}>
-          🗑 削除の履歴
+          🗑 削除履歴
         </button>
-        <button onClick={() => doPrint('chart')} className="bg-sky-500 text-white rounded-lg px-2.5 py-1.5 text-sm font-semibold hover:bg-sky-600">🖨 台帳を印刷（A3横）</button>
-        <button onClick={() => doPrint('list')} className="bg-sky-100 text-sky-800 rounded-lg px-2.5 py-1.5 text-sm font-semibold hover:bg-sky-200">🖨 一覧を印刷（A4縦）</button>
+        <button onClick={() => doPrint('chart')} className="bg-sky-500 text-white rounded-lg px-2.5 py-1.5 text-sm font-semibold hover:bg-sky-600">🖨 一覧表印刷</button>
+        <button onClick={() => doPrint('list')} className="bg-sky-100 text-sky-800 rounded-lg px-2.5 py-1.5 text-sm font-semibold hover:bg-sky-200">🖨 予約リスト印刷</button>
         {/* 入浴・洗濯管理表。日曜はじまりの1週間ぶんを Excel で落とす。 */}
         <span className="inline-flex items-center gap-1 rounded-lg bg-teal-50 border border-teal-200 px-2 py-1"
           title="選んだ週の入浴・洗濯管理表を Excel で作ります。">
@@ -1041,7 +1044,7 @@ export default function ReserveLedger({ year, month, people, nameMode, onSummary
           <button disabled={busy || !recDay} onClick={() => downloadRecordSheet('2')}
             className="bg-violet-600 text-white rounded px-2 py-1 text-xs font-bold hover:bg-violet-700 disabled:opacity-40">②</button>
         </span>
-        <button onClick={() => load()} className="bg-gray-200 text-gray-700 rounded-lg px-2.5 py-1.5 text-sm font-semibold">🔄 更新</button>
+        {/* 「🔄 更新」は上の帯（ReserveApp）へ移した */}
       </div>
 
       {/* 取り消しの行。ボタンの行の下に出し、知らせはその右に並べる（現場の指定）。
@@ -1073,7 +1076,7 @@ export default function ReserveLedger({ year, month, people, nameMode, onSummary
       {trashOpen && (
         <div className="rv-noprint rounded-xl border border-slate-300 bg-white overflow-hidden">
           <div className="px-3 py-2 font-bold text-sm bg-slate-100 border-b border-slate-200 flex items-center gap-2">
-            🗑 削除の履歴（新しい順）
+            🗑 削除履歴（新しい順）
             <span className="font-normal text-xs text-slate-500">消した予約は「削除ログ」シートに残っています。月をまたいだぶんも出ます。</span>
             <button onClick={loadTrash} className="ml-auto text-xs text-sky-600 underline">再読込</button>
           </div>
@@ -1178,7 +1181,7 @@ export default function ReserveLedger({ year, month, people, nameMode, onSummary
       {/* 予約の追加・編集 */}
       {form && (
         <div className="rv-noprint rounded-xl border border-emerald-200 bg-white p-4 space-y-3">
-          <div className="font-bold text-gray-800">{form.id ? '✏️ 予約を編集' : '＋ 予約を追加'}</div>
+          <div className="font-bold text-gray-800">{form.id ? '✏️ 予約を編集' : '＋ 予約追加'}</div>
 
           {/* 期間（±1日ボタン付き。延長・短縮が多いので押すだけで直せるように） */}
           <div className="flex items-end gap-3 flex-wrap">
@@ -1635,7 +1638,7 @@ export default function ReserveLedger({ year, month, people, nameMode, onSummary
         動かす先が埋まっているときは確認してから動かします。入れ替えたいときは、先に片方を<b>「仮置き」</b>へ逃がしてください
         （仮置きは実在しない部屋なので、空き部屋数や空き検索には出ません）。
         移動は「↩ 直前の移動を戻す」、削除は「↩ 削除を取り消す」で、それぞれ直前の1回を取り消せます。
-        <b>消した予約は「削除ログ」シートに残る</b>ので、あとから気づいたときも「🗑 削除の履歴」からいつでも戻せます
+        <b>消した予約は「削除ログ」シートに残る</b>ので、あとから気づいたときも「🗑 削除履歴」からいつでも戻せます
         （消したときと同じ内容・同じ行で戻ります）。
         空きマスをクリックで追加、予約のマスをクリックで編集。期間を入れると、その期間を丸ごと押さえられる部屋が選択肢に「○」で出ます。
         入所時間は初日の名前の上、退所時間は最終日の名前の下に出ます。<b>家族送迎</b>のときは時間の前に <b>FA</b> が付きます

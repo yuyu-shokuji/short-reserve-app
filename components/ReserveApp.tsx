@@ -15,6 +15,8 @@ export default function ReserveApp() {
   const [setupError, setSetupError] = useState('');
   // 件数と稼働率はチャート側で数えている。上の帯に1行で並べたいので受け取る。
   const [summary, setSummary] = useState<LedgerSummary | null>(null);
+  // 「更新」を押すたびに増やす。チャート側はこれが変わったら読み直す。
+  const [reloadKey, setReloadKey] = useState(0);
 
   /**
    * チャートの表示方式。食事毎（滞在する日すべてに氏名）と 予約毎（1件に1回だけ）。
@@ -95,6 +97,9 @@ export default function ReserveApp() {
               </button>
             ))}
           </span>
+          {/* 読み直し。押すと reloadKey が増えて、チャート側が読み直す。 */}
+          <button onClick={() => setReloadKey(k => k + 1)}
+            className="bg-gray-200 text-gray-700 rounded-lg px-2.5 py-1 text-sm font-semibold hover:bg-gray-300">🔄 更新</button>
         </div>
       </div>
 
@@ -104,7 +109,7 @@ export default function ReserveApp() {
         </div>
       ) : (
         <ReserveLedger year={year} month={month} people={people}
-          nameMode={nameMode} onSummary={setSummary} />
+          nameMode={nameMode} reloadKey={reloadKey} onSummary={setSummary} />
       )}
     </div>
   );
