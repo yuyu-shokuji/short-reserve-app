@@ -806,6 +806,35 @@ export default function ReserveLedger({ year, month, people }: Props) {
     } finally { setBusy(false); }
   };
 
+  /** 記録表①②（1日ぶん）。日付を選んで Excel で落とす。 */
+  const [recDay, setRecDay] = useState('');
+  useEffect(() => {
+    const t = todayISO();
+    const first = isoOf(year, month, 1), last = isoOf(year, month, daysInMonth);
+    setRecDay(t >= first && t <= last ? t : first);
+  }, [year, month, daysInMonth]);
+
+  const downloadRecordSheet = async (form: '1' | '2') => {
+    if (!recDay) return;
+    setBusy(true); setError('');
+    try {
+      const res = await fetch(`/api/record-sheet?day=${recDay}&form=${form}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || '作成に失敗しました');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `記録表${form === '1' ? '①' : '②'}_${recDay}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setMsg(`記録表${form === '1' ? '①' : '②'}（${recDay}）を作りました。${res.headers.get('X-Filled-Count') ?? ''}名`);
+    } catch (e: any) {
+      setError(e.message || '記録表の作成に失敗しました');
+    } finally { setBusy(false); }
+  };
+
   const printChart = printWhat === 'chart';
   const printBody = PRINT_H - 44;   // 見出し1行ぶんを空けておく
   const printZoom = chartH > printBody ? Math.max(0.5, Math.floor((printBody / chartH) * 100) / 100) : 1;
@@ -1019,6 +1048,17 @@ export default function ReserveLedger({ year, month, people }: Props) {
             className="bg-teal-600 text-white rounded px-2.5 py-1 text-xs font-bold hover:bg-teal-700 disabled:opacity-40">
             Excelを作る
           </button>
+        </span>
+        {/* 記録表①②。1日ぶんを Excel で落とす（1シートにさくらとすみれ）。 */}
+        <span className="inline-flex items-center gap-1 rounded-lg bg-violet-50 border border-violet-200 px-2 py-1"
+          title="選んだ日の記録表を Excel で作ります。各部屋の利用者名と来所・帰所が入ります。">
+          <span className="text-xs font-semibold text-violet-800">📋 記録表</span>
+          <input type="date" value={recDay} onChange={e => setRecDay(e.target.value)}
+            className="border border-violet-300 rounded px-1 py-1 text-xs bg-white" />
+          <button disabled={busy || !recDay} onClick={() => downloadRecordSheet('1')}
+            className="bg-violet-600 text-white rounded px-2 py-1 text-xs font-bold hover:bg-violet-700 disabled:opacity-40">①</button>
+          <button disabled={busy || !recDay} onClick={() => downloadRecordSheet('2')}
+            className="bg-violet-600 text-white rounded px-2 py-1 text-xs font-bold hover:bg-violet-700 disabled:opacity-40">②</button>
         </span>
         <button onClick={() => load()} className="bg-gray-200 text-gray-700 rounded-lg px-2.5 py-1.5 text-sm font-semibold">🔄 更新</button>
       </div>
