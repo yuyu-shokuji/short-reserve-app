@@ -32,6 +32,7 @@ const FORMS = {
     label: '記録表①',
     date: { year: 11, month: 13, day: 15, dow: 17 },   // K / M / O / Q
     dayUnit: 0,                                        // ①は「日」のセルがひな形にある
+    roomBreak: false,                                  // ①は棟名と番号の間に全角空きがある
     roomRows: [5, 8, 11, 14, 17, 20, 23, 26, 29, 32],
     colRoom: 2, colName: 3, colVisit: 33,              // B / C / AG
   },
@@ -43,6 +44,10 @@ const FORMS = {
     //    曜日を Q へ1つずらす。①と同じ並びになる。
     date: { year: 11, month: 13, day: 15, dow: 17 },   // K / M / O / Q（ずらしたあと）
     dayUnit: 16,                                       // P に「日」を足す
+    // ⚠️ ②の居室名は「すみれ０１」と詰まっていて、列が狭いので折り返しで表示される。
+    //    書体が ＭＳ Ｐゴシック（字幅がばらばら）なので、棟名によって折れる位置が変わり、
+    //    さくらだと「さくら０／７」と割れてしまう。棟名のあとで必ず改行させる。
+    roomBreak: true,
     roomRows: [5, 9, 13, 17, 21, 25, 29, 33, 37, 41],
     colRoom: 2, colName: 3, colVisit: 0,               // ②に来所帰所の欄は無い
   },
@@ -165,7 +170,11 @@ export async function buildRecordSheet(day: string, form: FormKey): Promise<Reco
       const r = off + tr;
       const tplRoom = String(t.cells.find(x => x.r === tr && x.c === f.colRoom)?.v ?? '');
       // ひな形の「すみれ　　０１」の棟名だけ入れ替える（空きの入り方をそのまま残すため）
-      ws.getCell(r, f.colRoom).value = tplRoom.replace(/^[^\s０-９]+/, unit);
+      const rc = ws.getCell(r, f.colRoom);
+      rc.value = f.roomBreak
+        ? `${unit}\n${(tplRoom.match(/[０-９]+$/) ?? [''])[0]}`
+        : tplRoom.replace(/^[^\s０-９]+/, unit);
+      if (f.roomBreak) rc.alignment = { ...(rc.alignment ?? {}), wrapText: true };
       const o = by.get(`${unit}-${no}`);
       ws.getCell(r, f.colName).value = o ? o.name : null;
       if (o) filled++;

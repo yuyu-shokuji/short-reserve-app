@@ -44,8 +44,12 @@ def style_of(cell):
     if fo: st["font"] = fo
 
     a = {}
-    if al.horizontal: a["horizontal"] = al.horizontal
-    if al.vertical: a["vertical"] = al.vertical
+    # ⚠️ 縦位置の呼び名が Excel と exceljs で違う。Excelは center、exceljs は middle。
+    #    そのまま渡すと無効な値として捨てられ、ぜんぶ下寄せになる（2026-09-29に発覚）。
+    if al.horizontal and al.horizontal != "general":
+        a["horizontal"] = al.horizontal
+    if al.vertical:
+        a["vertical"] = "middle" if al.vertical == "center" else al.vertical
     if al.wrap_text: a["wrapText"] = True
     if al.shrink_to_fit: a["shrinkToFit"] = True
     if al.text_rotation: a["textRotation"] = al.text_rotation
