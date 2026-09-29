@@ -1008,19 +1008,6 @@ export default function ReserveLedger({ year, month, people, nameMode, onSummary
 
       {/* 件数と稼働率は上の帯（ReserveApp）へ渡して、タイトル・月選びと1行に並べている。 */}
       <div className="rv-noprint flex items-center gap-2 flex-wrap">
-        {lastDelete && (
-          <button disabled={busy} onClick={() => restoreDeleted()}
-            title={`${lastDelete.name} さん ${lastDelete.building}${pad2(lastDelete.room)}号 ${lastDelete.start}〜${lastDelete.end}`}
-            className="rounded-lg bg-red-600 text-white px-2.5 py-1.5 text-sm font-bold hover:bg-red-700 disabled:opacity-40">
-            ↩ 削除を取り消す（{lastDelete.name}）
-          </button>
-        )}
-        {lastMove && (
-          <button disabled={busy} onClick={doUndoMove}
-            className="rounded-lg bg-amber-500 text-white px-2.5 py-1.5 text-sm font-bold hover:bg-amber-600 disabled:opacity-40">
-            ↩ 直前の移動を戻す
-          </button>
-        )}
         <button onClick={() => openNew(rooms[0]?.building ?? 'さくら', rooms[0]?.room ?? 1, isoOf(year, month, 1))}
           className="bg-emerald-500 text-white rounded-lg px-3 py-1.5 text-sm font-semibold hover:bg-emerald-600">＋ 予約を追加</button>
         {/* 表示方式の切り替えは上の帯（ReserveApp）へ移した */}
@@ -1056,6 +1043,31 @@ export default function ReserveLedger({ year, month, people, nameMode, onSummary
         </span>
         <button onClick={() => load()} className="bg-gray-200 text-gray-700 rounded-lg px-2.5 py-1.5 text-sm font-semibold">🔄 更新</button>
       </div>
+
+      {/* 取り消しの行。ボタンの行の下に出し、知らせはその右に並べる（現場の指定）。
+          何も無いときは行そのものを出さないので、ふだんは表の位置が動かない。 */}
+      {(lastDelete || lastMove || msg) && (
+        <div className="rv-noprint flex items-center gap-2 flex-wrap">
+          {lastDelete && (
+            <button disabled={busy} onClick={() => restoreDeleted()}
+              title={`${lastDelete.name} さん ${lastDelete.building}${pad2(lastDelete.room)}号 ${lastDelete.start}〜${lastDelete.end}`}
+              className="rounded-lg bg-red-600 text-white px-2.5 py-1.5 text-sm font-bold hover:bg-red-700 disabled:opacity-40">
+              ↩ 削除を取り消す（{lastDelete.name}）
+            </button>
+          )}
+          {lastMove && (
+            <button disabled={busy} onClick={doUndoMove}
+              className="rounded-lg bg-amber-500 text-white px-2.5 py-1.5 text-sm font-bold hover:bg-amber-600 disabled:opacity-40">
+              ↩ 直前の移動を戻す
+            </button>
+          )}
+          {msg && (
+            <span className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm text-emerald-800 font-medium">
+              {msg}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* 削除の履歴。消した予約は消さずに「削除ログ」シートへ積んであるので、あとからでも戻せる。 */}
       {trashOpen && (
@@ -1116,7 +1128,6 @@ export default function ReserveLedger({ year, month, people, nameMode, onSummary
         </div>
       )}
 
-      {msg && <div className="rv-noprint rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 font-medium">{msg}</div>}
       {error && <div className="rv-noprint rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">⚠ {error}</div>}
       {doubleBooked.size > 0 && (
         <div className="rv-noprint rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
