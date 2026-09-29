@@ -201,6 +201,13 @@ interface TrashEntry {
   inTime: string; soutaiIn: SoutaiKind; outTime: string; soutaiOut: SoutaiKind; note: string;
 }
 
+/**
+ * チャートの表示方式（上の帯で切り替える）。
+ *   every … 食事毎。滞在している日すべてのマスに氏名を出す
+ *   once  … 予約毎。1件の予約に1回だけ、まとめて大きく出す（既定）
+ */
+export type NameMode = 'every' | 'once';
+
 /** 上の帯に出す集計。件数と稼働率はここで数えているので、親へ渡して1行に並べる。 */
 export interface LedgerSummary {
   confirmed: number; tentative: number;
@@ -210,10 +217,11 @@ export interface LedgerSummary {
 
 interface Props {
   year: number; month: number; people: Person[];
+  nameMode: NameMode;
   onSummary?: (s: LedgerSummary | null) => void;
 }
 
-export default function ReserveLedger({ year, month, people, onSummary }: Props) {
+export default function ReserveLedger({ year, month, people, nameMode, onSummary }: Props) {
   const [rows, setRows] = useState<Reservation[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [daysInMonth, setDaysInMonth] = useState(new Date(year, month, 0).getDate());
@@ -237,24 +245,6 @@ export default function ReserveLedger({ year, month, people, onSummary }: Props)
   // 削除ログ（消した予約の履歴）。開いたときだけ読む。
   const [trashOpen, setTrashOpen] = useState(false);
   const [trash, setTrash] = useState<TrashEntry[] | null>(null);
-  /**
-   * 氏名の出し方。現場と相談中のため画面で切り替えられるようにしてある（2026-09-22）。
-   *   every … 滞在している日すべてに出す
-   *   once  … 塊に1回だけ中央に大きく出す（ガントチャート流。既定）
-   * 選んだほうはこの端末に覚えておく。
-   * 既定を once にした際にキー名を変えてある（前に毎日を選んだ端末でも、まず once で見えるように）。
-   */
-  const [nameMode, setNameMode] = useState<'every' | 'once'>('once');
-  useEffect(() => {
-    try {
-      const v = localStorage.getItem('rv-name-mode2');
-      if (v === 'once' || v === 'every') setNameMode(v);
-    } catch { /* 保存できない環境では既定のまま */ }
-  }, []);
-  const changeNameMode = (v: 'every' | 'once') => {
-    setNameMode(v);
-    try { localStorage.setItem('rv-name-mode2', v); } catch { /* 保存できなくても表示は変わる */ }
-  };
 
   /**
    * 印刷は台帳（A3横）と予約一覧（A4縦）で紙が違うので、ボタンも別にして押したほうだけ刷る。
@@ -389,7 +379,7 @@ export default function ReserveLedger({ year, month, people, onSummary }: Props)
         return out;
       });
 
-      // 氏名は塊に1回だけ。行ごとに連続している範囲を拾い、
+      // 予約毎の表示では氏名は1回だけ。行ごとに連続している範囲を拾い、
       // 昼 → 夕 → 朝 の順でいちばん長い行を選んで、その真ん中のマスに出す。
       // 名前の繰り返しが消えるぶん、文字を大きくできる。
       const runs = new Map<string, { rv: Reservation; row: number; s: number; e: number }[]>();
@@ -411,7 +401,7 @@ export default function ReserveLedger({ year, month, people, onSummary }: Props)
       for (const seen of runs.values()) {
         // 同じ予約でも、食事の無い時間帯で分断されて離れ小島になることがある。
         // 例）1泊2日で16:00入所・09:00退所＝初日の夕と二日目の朝だけ。斜めに離れて枠が2つに割れ、
-        //     別の予約に見えてしまう。そこで「氏名は塊に1回」は、離れたかたまりごとに1回とする。
+        //     別の予約に見えてしまう。そこで予約毎の表示は、離れたかたまりごとに1回出す。
         const groups: Run[][] = [];
         const taken = new Array(seen.length).fill(false);
         for (let i = 0; i < seen.length; i++) {
@@ -982,7 +972,7 @@ export default function ReserveLedger({ year, month, people, onSummary }: Props)
            ＝日によって行がガタつかず、横に目で追える。はみ出しは td の overflow:hidden で切る。 */
         /* 1部屋＝朝昼夕の3行。1行は氏名1行ぶんの高さでそろえる。 */
         .rv-table tbody tr.rv-mealrow td, .rv-table tbody tr.rv-mealrow th { height: 18px; }
-        /* 氏名は塊に1回だけ。そのマスだけ枠外へはみ出させ、塊の幅で中央に置く。
+        /* 予約毎の表示では氏名は1回だけ。そのマスだけ枠外へはみ出させ、塊の幅で中央に置く。
            はみ出す先は同じ塊の（名前を出さない）マスなので、隣の予約を隠さない。 */
         .rv-table td.rv-haslabel { overflow: visible; position: relative; z-index: 3; }
         /* 名前と時刻を1マスに並べるとき（夕食まで食べて退所する日など） */
@@ -1032,18 +1022,7 @@ export default function ReserveLedger({ year, month, people, onSummary }: Props)
         )}
         <button onClick={() => openNew(rooms[0]?.building ?? 'さくら', rooms[0]?.room ?? 1, isoOf(year, month, 1))}
           className="ml-auto bg-emerald-500 text-white rounded-lg px-3 py-1.5 text-sm font-semibold hover:bg-emerald-600">＋ 予約を追加</button>
-        {/* 氏名の出し方。毎日と塊に1回を両方使うので、切り替えは残す（2026-09-22 現場の結論） */}
-        <span className="inline-flex items-center rounded-lg bg-gray-100 p-0.5 text-xs"
-          title="チャートに氏名をどう出すか。現場で見比べて決めてください。">
-          <span className="px-1.5 text-gray-500">氏名</span>
-          {([['every', '毎日'], ['once', '塊に1回']] as const).map(([v, label]) => (
-            <button key={v} onClick={() => changeNameMode(v)}
-              className={`px-2 py-1 rounded-md font-semibold ${
-                nameMode === v ? 'bg-white shadow text-gray-800' : 'text-gray-500 hover:text-gray-700'}`}>
-              {label}
-            </button>
-          ))}
-        </span>
+        {/* 表示方式の切り替えは上の帯（ReserveApp）へ移した */}
         <button onClick={() => { const open = !trashOpen; setTrashOpen(open); if (open) loadTrash(); }}
           className={`rounded-lg px-2.5 py-1.5 text-sm font-semibold ${trashOpen ? 'bg-slate-600 text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}>
           🗑 削除の履歴
@@ -1526,7 +1505,7 @@ export default function ReserveLedger({ year, month, people, onSummary }: Props)
                                     cell.label && nameMode === 'once' ? 'rv-haslabel ' : ''}${
                                     shown ? 'rv-grab ' : ''}${isSource ? 'opacity-40 ' : ''}${timeAlign}${dnd}${warn}${blk}${base}`}>
                                   {(() => {
-                                    // このマスに名前を出すか（毎日モードは常に／塊に1回モードは代表マスだけ）
+                                    // このマスに名前を出すか（食事毎は常に／予約毎は代表マスだけ）
                                     const nameRv = shown && (nameMode === 'every' ? shown : cell.label?.rv) || null;
                                     const nm = nameRv ? tightName(nameRv.name) : '';
 
