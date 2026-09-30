@@ -1,7 +1,7 @@
 // 予約から「入浴・洗濯管理表」を1週間ぶん組み立てる。
 //
 // いまの紙（ネオライフサポート ショートステイ 入浴・洗濯管理表）に合わせつつ、
-// 入浴欄・洗濯欄は2セルではなく1セルにしてある（1週14列＋見出しで17列、A4横1枚）。
+// 入浴欄・洗濯欄は2セルではなく1セルにしてある（1週14列＋見出しで17列、A4縦1枚）。
 //
 // 並びはユニット順 → 部屋番号順 → 開始日順。
 // ⚠️ 同じ人でも週の途中で部屋が変われば別の行にする（現場の運用がそうなっている）。
@@ -119,7 +119,7 @@ export async function buildBathSheet(day: string): Promise<BathSheet> {
   wb.creator = 'グラン悠遊 ショート予約台帳';
   const ws = wb.addWorksheet(weekStart, {
     pageSetup: {
-      paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0,
+      paperSize: 9, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0,
       margins: { left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 },
     },
   });
@@ -128,11 +128,13 @@ export async function buildBathSheet(day: string): Promise<BathSheet> {
   const DAY0 = 4;
   const colOf = (i: number, kind: 'bath' | 'wash') => DAY0 + i * 2 + (kind === 'wash' ? 1 : 0);
   const LAST = colOf(6, 'wash') + 1;
-  ws.getColumn(1).width = 2.5;
+  // ⚠️ A4縦（現場の指定）。横幅が狭いので、日付の列を少し細くして氏名の列に回している。
+  //    幅は「ページに合わせる」で縮むぶんも見込んで、ほぼ等倍（9割強）で収まるようにしてある。
+  ws.getColumn(1).width = 1.5;
   ws.getColumn(2).width = 7.5;
-  ws.getColumn(3).width = 18;
-  for (let i = 0; i < 7; i++) { ws.getColumn(colOf(i, 'bath')).width = 5; ws.getColumn(colOf(i, 'wash')).width = 5; }
-  ws.getColumn(LAST).width = 10;
+  ws.getColumn(3).width = 22;
+  for (let i = 0; i < 7; i++) { ws.getColumn(colOf(i, 'bath')).width = 4.5; ws.getColumn(colOf(i, 'wash')).width = 4.5; }
+  ws.getColumn(LAST).width = 10;                  // ⚠️ 9 にしないこと。exceljs は 9 を「標準幅」とみなして書き出さない
 
   ws.mergeCells(1, 2, 1, LAST);
   const t = ws.getCell(1, 2);
@@ -202,7 +204,8 @@ export async function buildBathSheet(day: string): Promise<BathSheet> {
     const nm = ws.getCell(r, 3);
     nm.value = `${rv.name}　様`;
     nm.font = { name: FONT, size: 11 };
-    nm.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+    // 長い名前でも枠からはみ出さないように、入りきらないときは文字を縮める（shrinkToFit）
+    nm.alignment = { horizontal: 'left', vertical: 'middle', indent: 1, shrinkToFit: true };
 
     for (let i = 0; i < 7; i++) {
       const day = isoOf(days[i]);
