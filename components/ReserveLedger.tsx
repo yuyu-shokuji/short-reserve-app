@@ -53,8 +53,15 @@ interface Vacancy {
   takenBy?: { name: string; start: string; end: string; status: string }[];
 }
 
-/** 右端の予約入力パネルの幅(px)。チャートの自動横ずらしもこの幅で計算する。 */
+/** 予約入力パネルの幅(px)。チャートの自動横ずらしもこの幅で計算する。 */
 const PANEL_W = 400;
+/**
+ * この日以降に始まる予約は、入力パネルを左端に出す（2026-09-30 現場の案）。
+ * 下旬は右に出すとどのみち隠れるので、左に出したほうがチャートを動かさずに済む。
+ * 左に出すと部屋名の列は隠れるが、パネルの中に棟・部屋が出ているので困らない。
+ */
+const LEFT_PANEL_FROM_DAY = 20;
+type PanelSide = 'left' | 'right';
 // A3横（余白6mm）の印刷できる範囲。1mm = 96/25.4 px。
 const PRINT_W = 1542, PRINT_H = 1077;
 
@@ -235,6 +242,8 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
   const [busy, setBusy] = useState(false);
 
   const [form, setForm] = useState<FormState | null>(null);
+  // パネルを左右どちらに出すか。開いたときに決めて、日付を直している間は動かさない。
+  const [panelSide, setPanelSide] = useState<PanelSide>('right');
   const [conflicts, setConflicts] = useState<Conflict[] | null>(null);
   const [vacancy, setVacancy] = useState<{ vacancies: Vacancy[]; freeCount: number } | null>(null);
   const [vacLoading, setVacLoading] = useState(false);
@@ -562,7 +571,15 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
   const vacOf = (building: string, room: number) =>
     vacancy?.vacancies.find(v => v.building === building && v.room === room);
 
+  /** 始まりの日（前の月から続く予約は1日扱い）で、パネルを出す側を決める。 */
+  const sideFor = (start: string): PanelSide => {
+    const first = isoOf(year, month, 1);
+    const d = start < first ? 1 : Number(start.slice(8));
+    return d >= LEFT_PANEL_FROM_DAY ? 'left' : 'right';
+  };
+
   const openNew = (building: string, room: number, iso: string) => {
+    setPanelSide(sideFor(iso));
     setForm({
       id: '', name: '', building, room, start: iso, end: iso,
       // 時刻の既定値。空にすると時刻欄が「いまの時刻」から始まって使いにくいため。
@@ -571,6 +588,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
     setConflicts(null); setMsg('');
   };
   const openEdit = (rv: Reservation) => {
+    setPanelSide(sideFor(rv.start));
     setForm({
       id: rv.id, name: rv.name, building: rv.building, room: rv.room,
       start: rv.start, end: rv.end, status: rv.status,
@@ -772,22 +790,26 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
     // 表の中での位置（左の固定列の右から日付が並ぶ）
     const spanL = fixedW + (sDay - 1) * dayW;
     const spanR = fixedW + eDay * dayW;
-    // 箱の中で、固定列より右・パネルより左が見える範囲
+    // 箱の中で、日付が見えている範囲 [left, right]。
+    //   右パネル … 固定列の右から、パネルの左まで
+    //   左パネル … パネルの右（固定列より右）から、箱の右端まで
     const rect = box.getBoundingClientRect();
-    const visibleR = Math.min(rect.right, window.innerWidth - PANEL_W) - rect.left;
-    if (visibleR - fixedW < dayW) return;                        // 画面が狭すぎてずらしても意味がない
-
     const GAP = 12;                                              // パネルの縁にぴったり付けない
-    const right = visibleR - GAP;                                // 見えている範囲の右端
+    const left = panelSide === 'left' ? Math.max(fixedW, PANEL_W - rect.left + GAP) : fixedW;
+    const right = panelSide === 'left'
+      ? box.clientWidth
+      : Math.min(rect.right, window.innerWidth - PANEL_W) - rect.left - GAP;
+    if (right - left < dayW) return;                             // 画面が狭すぎてずらしても意味がない
+
     let target = box.scrollLeft;
-    if (spanR - spanL <= right - fixedW) {
+    if (spanR - spanL <= right - left) {
       // 見える範囲に丸ごと入る長さ → 入りきるように必要なぶんだけ動かす
       if (spanR - target > right) target = spanR - right;
-      if (spanL - target < fixedW) target = spanL - fixedW;
+      if (spanL - target < left) target = spanL - left;
     } else {
       // 長くて入りきらない → 始まりの日が見えていればそのまま。隠れているときだけ左端へ寄せる
       const startL = spanL - target;
-      if (startL < fixedW || startL + dayW > right) target = spanL - fixedW;
+      if (startL < left || startL + dayW > right) target = spanL - left;
     }
     target = Math.max(0, Math.round(target));
     if (Math.abs(target - box.scrollLeft) <= 1) return;
@@ -801,7 +823,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
     }, 600);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [panelKey, dayW, year, month, daysInMonth]);
+  }, [panelKey, panelSide, dayW, year, month, daysInMonth]);
 
   /**
    * 下の一覧はあいうえお順（利用者シートのふりがな）。
@@ -1254,9 +1276,11 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
       {/* 予約の入力欄は右端のパネルに出す（2026-09-30 現場の指定）。
           ⚠️ 表の上に普通に置くと、開くたびにチャートが10行ぶんほど下がって見づらい。
              右端に浮かせれば チャートは動かず、左の部屋名と月の前半〜中旬は見えたまま。
-             パネルが出ている間もチャートは触れるので、別のマスを押せばそのまま切り替わる。 */}
+             パネルが出ている間もチャートは触れるので、別のマスを押せばそのまま切り替わる。
+          20日以降に始まる予約は左端に出す（LEFT_PANEL_FROM_DAY）。 */}
       {form && (
-        <div className="rv-noprint fixed top-0 right-0 bottom-0 z-40 max-w-full flex flex-col bg-white border-l border-emerald-200 shadow-2xl"
+        <div className={`rv-noprint fixed top-0 bottom-0 z-40 max-w-full flex flex-col bg-white shadow-2xl border-emerald-200 ${
+          panelSide === 'left' ? 'left-0 border-r' : 'right-0 border-l'}`}
           style={{ width: PANEL_W }}>
           <div className="flex items-center gap-2 px-4 py-2.5 border-b border-emerald-100 bg-emerald-50">
             <span className="font-bold text-gray-800">{form.id ? '✏️ 予約を編集' : '＋ 予約追加'}</span>
