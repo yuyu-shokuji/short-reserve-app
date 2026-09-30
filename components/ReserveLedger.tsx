@@ -53,6 +53,8 @@ interface Vacancy {
   takenBy?: { name: string; start: string; end: string; status: string }[];
 }
 
+/** 右端の予約入力パネルの幅(px)。チャートの自動横ずらしもこの幅で計算する。 */
+const PANEL_W = 400;
 // A3横（余白6mm）の印刷できる範囲。1mm = 96/25.4 px。
 const PRINT_W = 1542, PRINT_H = 1077;
 
@@ -751,6 +753,57 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
   const dayW = Math.max(DAY_MIN, Math.floor(((availW || 0) - fixedW) / (dates.length || 1)) || 0);
 
   /**
+   * 右端パネルを開いたとき（別の予約に切り替えたとき・日付を変えたときも）、
+   * その予約がパネルに隠れない位置までチャートを横にずらす（2026-09-30 現場の要望）。
+   * ・すでに見えていれば動かさない（必要なぶんだけ動かす）
+   * ・予約が長くて入りきらないときは、始まりの日が見えるほうを優先する
+   * ・上下には動かさない（「チャートを上下に動かさない」の決まりどおり）
+   */
+  const panelKey = form ? `${form.id ?? ''}|${form.start}|${form.end}` : '';
+  useEffect(() => {
+    if (!form) return;
+    const box = bodyRef.current;
+    if (!box) return;
+    const first = isoOf(year, month, 1), last = isoOf(year, month, daysInMonth);
+    if (form.end < first || form.start > last) return;          // この月にかかっていない
+    const sDay = form.start < first ? 1 : Number(form.start.slice(8));
+    const eDay = form.end > last ? daysInMonth : Number(form.end.slice(8));
+
+    // 表の中での位置（左の固定列の右から日付が並ぶ）
+    const spanL = fixedW + (sDay - 1) * dayW;
+    const spanR = fixedW + eDay * dayW;
+    // 箱の中で、固定列より右・パネルより左が見える範囲
+    const rect = box.getBoundingClientRect();
+    const visibleR = Math.min(rect.right, window.innerWidth - PANEL_W) - rect.left;
+    if (visibleR - fixedW < dayW) return;                        // 画面が狭すぎてずらしても意味がない
+
+    const GAP = 12;                                              // パネルの縁にぴったり付けない
+    const right = visibleR - GAP;                                // 見えている範囲の右端
+    let target = box.scrollLeft;
+    if (spanR - spanL <= right - fixedW) {
+      // 見える範囲に丸ごと入る長さ → 入りきるように必要なぶんだけ動かす
+      if (spanR - target > right) target = spanR - right;
+      if (spanL - target < fixedW) target = spanL - fixedW;
+    } else {
+      // 長くて入りきらない → 始まりの日が見えていればそのまま。隠れているときだけ左端へ寄せる
+      const startL = spanL - target;
+      if (startL < fixedW || startL + dayW > right) target = spanL - fixedW;
+    }
+    target = Math.max(0, Math.round(target));
+    if (Math.abs(target - box.scrollLeft) <= 1) return;
+    const from = box.scrollLeft;
+    box.scrollTo({ left: target, behavior: 'smooth' });
+    // ⚠️ なめらかな動きは、画面が描かれていない状態（裏に回ったタブなど）だと始まらないことがある。
+    //    少し待って「まったく動いていない」ときだけ、その位置へ直接移す。
+    //    動き始めていれば任せる（途中で割り込むとカクッと止まるし、手で動かした分も打ち消してしまう）。
+    const t = window.setTimeout(() => {
+      if (Math.abs(box.scrollLeft - from) <= 2) box.scrollLeft = target;
+    }, 600);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panelKey, dayW, year, month, daysInMonth]);
+
+  /**
    * 下の一覧はあいうえお順（利用者シートのふりがな）。
    * ふりがなが無い人は末尾にまわし、そのなかは氏名の読み順。
    * 同じ人が複数回いる場合は期間の早い順。
@@ -1203,7 +1256,8 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
              右端に浮かせれば チャートは動かず、左の部屋名と月の前半〜中旬は見えたまま。
              パネルが出ている間もチャートは触れるので、別のマスを押せばそのまま切り替わる。 */}
       {form && (
-        <div className="rv-noprint fixed top-0 right-0 bottom-0 z-40 w-[400px] max-w-full flex flex-col bg-white border-l border-emerald-200 shadow-2xl">
+        <div className="rv-noprint fixed top-0 right-0 bottom-0 z-40 max-w-full flex flex-col bg-white border-l border-emerald-200 shadow-2xl"
+          style={{ width: PANEL_W }}>
           <div className="flex items-center gap-2 px-4 py-2.5 border-b border-emerald-100 bg-emerald-50">
             <span className="font-bold text-gray-800">{form.id ? '✏️ 予約を編集' : '＋ 予約追加'}</span>
             <button disabled={busy} onClick={() => { setForm(null); setConflicts(null); }}
@@ -1370,6 +1424,9 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
       {loading ? <div className="text-sm text-gray-400 animate-pulse p-4">読み込み中...</div> : (
         <div ref={bodyRef} className="rv-chart rv-scroll bg-white rounded-xl border border-gray-100 shadow-sm overflow-auto max-h-[64vh] print:max-h-none"
              onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setPreview(null); }}>
+          {/* 右端パネルが出ている間は、表の右に同じ幅の余白を足す。
+              表が画面幅にちょうど収まっているときでも横にずらせるようにするため。 */}
+          <div className="flex w-max">
           <table ref={chartRef} className="rv-table text-[11px]" style={{ width: fixedW + dayW * dates.length }}>
             <colgroup>
               <col style={{ width: OV_W.bld }} />
@@ -1613,6 +1670,8 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
               })()}
             </tbody>
           </table>
+          {form && <div className="rv-noprint shrink-0" style={{ width: PANEL_W }} aria-hidden />}
+          </div>
         </div>
       )}
 
