@@ -250,6 +250,16 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
   // お知らせの行の「入れ替わりの時刻が合わない」を押したときに、一覧を浮かせて出す
   const [clashOpen, setClashOpen] = useState(false);
 
+  // 右端の入力パネルは Esc でも閉じられる
+  useEffect(() => {
+    if (!form) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !busy) { setForm(null); setConflicts(null); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [form, busy]);
+
   /**
    * 印刷は台帳（A3横）と予約一覧（A4縦）で紙が違うので、ボタンも別にして押したほうだけ刷る。
    * 用紙の指定は CSS の @page で、状態が画面に反映されてから印刷を呼ぶ必要がある（nonce で1拍おく）。
@@ -1188,13 +1198,23 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
       )}
 
       {/* 予約の追加・編集 */}
+      {/* 予約の入力欄は右端のパネルに出す（2026-09-30 現場の指定）。
+          ⚠️ 表の上に普通に置くと、開くたびにチャートが10行ぶんほど下がって見づらい。
+             右端に浮かせれば チャートは動かず、左の部屋名と月の前半〜中旬は見えたまま。
+             パネルが出ている間もチャートは触れるので、別のマスを押せばそのまま切り替わる。 */}
       {form && (
-        <div className="rv-noprint rounded-xl border border-emerald-200 bg-white p-4 space-y-3">
-          <div className="font-bold text-gray-800">{form.id ? '✏️ 予約を編集' : '＋ 予約追加'}</div>
+        <div className="rv-noprint fixed top-0 right-0 bottom-0 z-40 w-[400px] max-w-full flex flex-col bg-white border-l border-emerald-200 shadow-2xl">
+          <div className="flex items-center gap-2 px-4 py-2.5 border-b border-emerald-100 bg-emerald-50">
+            <span className="font-bold text-gray-800">{form.id ? '✏️ 予約を編集' : '＋ 予約追加'}</span>
+            <button disabled={busy} onClick={() => { setForm(null); setConflicts(null); }}
+              aria-label="閉じる" title="閉じる（Esc）"
+              className="ml-auto w-8 h-8 rounded-lg text-gray-500 hover:bg-white hover:text-gray-800 text-lg leading-none">×</button>
+          </div>
 
+          <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
           {/* 期間（±1日ボタン付き。延長・短縮が多いので押すだけで直せるように） */}
-          <div className="flex items-end gap-3 flex-wrap">
-            <label className="text-xs text-gray-600 space-y-1">
+          <div className="space-y-2">
+            <label className="text-xs text-gray-600 space-y-1 block">
               <span className="font-semibold block">開始日（入所日）</span>
               <div className="flex items-center gap-1">
                 <button type="button" onClick={() => patch({ start: addDays(form.start, -1) })}
@@ -1206,7 +1226,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
                   className="px-2 py-1.5 rounded bg-gray-100 hover:bg-gray-200 font-bold">＋</button>
               </div>
             </label>
-            <label className="text-xs text-gray-600 space-y-1">
+            <label className="text-xs text-gray-600 space-y-1 block">
               <span className="font-semibold block">終了日（退所日）</span>
               <div className="flex items-center gap-1">
                 <button type="button" onClick={() => { const e2 = addDays(form.end, -1); if (e2 >= form.start) patch({ end: e2 }); }}
@@ -1218,7 +1238,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
                   className="px-2 py-1.5 rounded bg-gray-100 hover:bg-gray-200 font-bold">＋</button>
               </div>
             </label>
-            <div className="text-sm text-gray-600 pb-2">{formNights}泊{formNights + 1}日</div>
+            <div className="text-sm font-semibold text-gray-700">{formNights}泊{formNights + 1}日</div>
           </div>
 
           {/* この期間の空き状況 */}
@@ -1235,8 +1255,9 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
                   </span>}
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <label className="text-xs text-gray-600 space-y-1">
+          {/* パネルの幅に合わせて 氏名 → 棟・状態 → 部屋 の順に積む */}
+          <div className="grid grid-cols-2 gap-3">
+            <label className="text-xs text-gray-600 space-y-1 col-span-2">
               <span className="font-semibold">氏名</span>
               <input list="rv-people" value={form.name} onChange={e => patch({ name: e.target.value })}
                 className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-sm" placeholder="氏名を選ぶ / 入力" />
@@ -1249,7 +1270,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
                 {buildings.map(b => <option key={b.name} value={b.name}>{b.name}</option>)}
               </select>
             </label>
-            <label className="text-xs text-gray-600 space-y-1">
+            <label className="text-xs text-gray-600 space-y-1 col-span-2 order-last">
               <span className="font-semibold">部屋（○＝この期間ずっと空き）</span>
               <select value={form.room} onChange={e => patch({ room: Number(e.target.value) })}
                 className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-sm bg-white">
@@ -1270,8 +1291,9 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
             </label>
           </div>
 
-          {/* 入退所の時間と送迎区分は別もの。送迎なしでも時間は入れられる。 */}
-          <div className="flex items-end gap-3 flex-wrap">
+          {/* 入退所の時間と送迎区分は別もの。送迎なしでも時間は入れられる。
+              パネルの幅に合わせて 入所（時間・送迎）／退所（時間・送迎）／備考 の3段に積む。 */}
+          <div className="grid grid-cols-2 gap-x-3 gap-y-3 items-end">
             {/* 時刻は「時」「分」のプルダウン。分は5分刻み。 */}
             <div className="text-xs text-gray-600 space-y-1">
               <span className="font-semibold block">入所時間（初日）</span>
@@ -1281,7 +1303,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
             <label className="text-xs text-gray-600 space-y-1">
               <span className="font-semibold block">入所の送迎</span>
               <select value={form.soutaiIn} onChange={e => patch({ soutaiIn: e.target.value as SoutaiKind })}
-                className="border border-gray-200 rounded-md px-2 py-1.5 text-sm bg-white">
+                className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-sm bg-white">
                 <option value="">なし</option>
                 <option value="送迎あり">送迎あり</option>
                 <option value="家族送迎">家族送迎（FA）</option>
@@ -1294,13 +1316,13 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
             <label className="text-xs text-gray-600 space-y-1">
               <span className="font-semibold block">退所の送迎</span>
               <select value={form.soutaiOut} onChange={e => patch({ soutaiOut: e.target.value as SoutaiKind })}
-                className="border border-gray-200 rounded-md px-2 py-1.5 text-sm bg-white">
+                className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-sm bg-white">
                 <option value="">なし</option>
                 <option value="送迎あり">送迎あり</option>
                 <option value="家族送迎">家族送迎（FA）</option>
               </select>
             </label>
-            <label className="text-xs text-gray-600 space-y-1 flex-1 min-w-[200px]">
+            <label className="text-xs text-gray-600 space-y-1 col-span-2">
               <span className="font-semibold block">備考</span>
               <input type="text" value={form.note} onChange={e => patch({ note: e.target.value })}
                 className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-sm" placeholder="連絡事項など" />
@@ -1332,8 +1354,10 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
               <button disabled={busy} onClick={() => doSave(true)} className="px-3 py-1.5 rounded-lg bg-red-600 text-white font-bold hover:bg-red-700 disabled:opacity-40">重なったまま保存する</button>
             </div>
           )}
+          </div>
 
-          <div className="flex items-center gap-2 flex-wrap">
+          {/* 保存・削除・閉じるはパネルの下に固定（項目が長くても押しに行かずに済むように） */}
+          <div className="flex items-center gap-2 flex-wrap px-4 py-3 border-t border-gray-100 bg-gray-50">
             <button disabled={busy} onClick={() => doSave()} className="px-4 py-2 rounded-lg bg-emerald-500 text-white font-bold hover:bg-emerald-600 disabled:opacity-40">保存</button>
             {form.id && <button disabled={busy} onClick={doDelete} className="px-4 py-2 rounded-lg bg-red-600 text-white font-bold hover:bg-red-700 disabled:opacity-40">🗑 削除</button>}
             <button disabled={busy} onClick={() => { setForm(null); setConflicts(null); }} className="px-3 py-2 text-gray-500 underline">閉じる</button>
