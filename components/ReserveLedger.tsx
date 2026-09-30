@@ -1019,7 +1019,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
           🗑 削除履歴
         </button>
         <button onClick={() => doPrint('chart')} className="bg-sky-500 text-white rounded-lg px-2.5 py-1.5 text-sm font-semibold hover:bg-sky-600">🖨 一覧表印刷</button>
-        <button onClick={() => doPrint('list')} className="bg-sky-100 text-sky-800 rounded-lg px-2.5 py-1.5 text-sm font-semibold hover:bg-sky-200">🖨 予約リスト印刷</button>
+        <button onClick={() => doPrint('list')} className="bg-sky-500 text-white rounded-lg px-2.5 py-1.5 text-sm font-semibold hover:bg-sky-600">🖨 予約リスト印刷</button>
         {/* 入浴・洗濯管理表。日曜はじまりの1週間ぶんを Excel で落とす。 */}
         <span className="inline-flex items-center gap-1 rounded-lg bg-teal-50 border border-teal-200 px-2 py-1"
           title="選んだ週の入浴・洗濯管理表を Excel で作ります。">
@@ -1115,13 +1115,13 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
         </div>
       )}
 
-      {/* お知らせ・警告の置き場。
-          高さを固定しておく（中でスクロール）。出たり消えたりで下のチャートが
-          上下にずれると、掴んでいたマスを見失うため。 */}
-      <div className="rv-noprint h-[68px] shrink-0 overflow-y-auto space-y-1.5">
-      {/* ドラッグ中の行き先を文字でも出す（マスが小さいので取り違え防止） */}
+      {/* ドラッグ中の行き先を文字でも出す（マスが小さいので取り違え防止）。
+          ⚠️ 画面の上に浮かせて出す。表の上に普通に置くと、出たり消えたりのたびに
+             チャートが上下にずれ、掴んでいたマスを見失う。
+             以前は高さ固定の枠（68px）を常に空けてこれを防いでいたが、ふだんは
+             空の1行に見えて邪魔だったので、枠をやめて浮かせる形にした（2026-09-30）。 */}
       {drag && preview && (
-        <div className="rv-noprint rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-sm text-sky-900 font-medium">
+        <div className="rv-noprint fixed top-2 left-1/2 -translate-x-1/2 z-50 shadow-lg rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-sm text-sky-900 font-medium pointer-events-none">
           🖐 {drag.rv.name} さん → <b>{preview.building}{pad2(preview.room)}号</b>
           {mdOf(preview.start)} 〜 {mdOf(preview.end)}（{nightsOf(preview.start, preview.end)}泊）
           {preview.start !== drag.rv.start && <span className="ml-2 text-sky-700">
@@ -1153,8 +1153,6 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
           </ul>
         </div>
       )}
-
-      </div>
 
       {/* 書こうとしたら重なっていたときの確認（移動・削除の取り消しで共用）。
           答えるまで残るものなので、チャートを押し下げないよう浮かせて出す。
