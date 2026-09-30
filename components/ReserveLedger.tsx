@@ -247,6 +247,8 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
   // 削除ログ（消した予約の履歴）。開いたときだけ読む。
   const [trashOpen, setTrashOpen] = useState(false);
   const [trash, setTrash] = useState<TrashEntry[] | null>(null);
+  // お知らせの行の「入れ替わりの時刻が合わない」を押したときに、一覧を浮かせて出す
+  const [clashOpen, setClashOpen] = useState(false);
 
   /**
    * 印刷は台帳（A3横）と予約一覧（A4縦）で紙が違うので、ボタンも別にして押したほうだけ刷る。
@@ -1047,30 +1049,78 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
         {/* 「🔄 更新」は上の帯（ReserveApp）へ移した */}
       </div>
 
-      {/* 取り消しの行。ボタンの行の下に出し、知らせはその右に並べる（現場の指定）。
-          何も無いときは行そのものを出さないので、ふだんは表の位置が動かない。 */}
-      {(lastDelete || lastMove || msg) && (
-        <div className="rv-noprint flex items-center gap-2 flex-wrap">
+      {/* お知らせの行（1行ぶんの高さを常に確保）。
+          ⚠️ 出たり消えたりでチャートが上下に動くと見づらく、ドラッグ中は掴んだマスも
+             見失うので、中身が無くても高さは取っておく（現場の指定・2026-09-30）。
+             並びは 取り消しボタン → 知らせ → 警告 → ドラッグ中の行き先。
+             1行に収まらないときは横にスクロールする。
+             時刻の合わない入れ替わりは件数だけ出し、押すと一覧を浮かせて出す。 */}
+      <div className="rv-noprint relative">
+        <div className="h-9 flex items-center gap-2 overflow-x-auto overflow-y-hidden whitespace-nowrap">
           {lastDelete && (
             <button disabled={busy} onClick={() => restoreDeleted()}
               title={`${lastDelete.name} さん ${lastDelete.building}${pad2(lastDelete.room)}号 ${lastDelete.start}〜${lastDelete.end}`}
-              className="rounded-lg bg-red-600 text-white px-2.5 py-1.5 text-sm font-bold hover:bg-red-700 disabled:opacity-40">
+              className="shrink-0 rounded-lg bg-red-600 text-white px-2.5 py-1 text-sm font-bold hover:bg-red-700 disabled:opacity-40">
               ↩ 削除を取り消す（{lastDelete.name}）
             </button>
           )}
           {lastMove && (
             <button disabled={busy} onClick={doUndoMove}
-              className="rounded-lg bg-amber-500 text-white px-2.5 py-1.5 text-sm font-bold hover:bg-amber-600 disabled:opacity-40">
+              className="shrink-0 rounded-lg bg-amber-500 text-white px-2.5 py-1 text-sm font-bold hover:bg-amber-600 disabled:opacity-40">
               ↩ 直前の移動を戻す
             </button>
           )}
           {msg && (
-            <span className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm text-emerald-800 font-medium">
+            <span className="shrink-0 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-sm text-emerald-800 font-medium">
               {msg}
             </span>
           )}
+          {error && (
+            <span className="shrink-0 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-sm text-red-700">⚠ {error}</span>
+          )}
+          {doubleBooked.size > 0 && (
+            <span className="shrink-0 rounded-lg border border-red-300 bg-red-50 px-2.5 py-1 text-sm text-red-800">
+              ⚠ 同じ人が同じ日に2部屋以上（表の赤いマス）
+            </span>
+          )}
+          {timeClash.size > 0 && (
+            <button onClick={() => setClashOpen(o => !o)}
+              className="shrink-0 rounded-lg border border-red-300 bg-red-50 px-2.5 py-1 text-sm text-red-800 font-bold hover:bg-red-100">
+              ⚠ 入れ替わりの時刻が合わない {timeClash.size}件 {clashOpen ? '▲' : '▼'}
+            </button>
+          )}
+          {/* ドラッグ中の行き先を文字でも出す（マスが小さいので取り違え防止） */}
+          {drag && preview && (
+            <span className="shrink-0 rounded-lg border border-sky-300 bg-sky-50 px-2.5 py-1 text-sm text-sky-900 font-medium">
+              🖐 {drag.rv.name} さん → <b>{preview.building}{pad2(preview.room)}号</b>
+              {' '}{mdOf(preview.start)} 〜 {mdOf(preview.end)}（{nightsOf(preview.start, preview.end)}泊）
+              {preview.start !== drag.rv.start && <span className="ml-2 text-sky-700">
+                ※ {Math.round((new Date(preview.start).getTime() - new Date(drag.rv.start).getTime()) / 86400000) > 0 ? '＋' : ''}
+                {Math.round((new Date(preview.start).getTime() - new Date(drag.rv.start).getTime()) / 86400000)}日
+              </span>}
+            </span>
+          )}
         </div>
-      )}
+        {/* 時刻の合わない入れ替わりの一覧。チャートを押し下げないよう浮かせて出す。 */}
+        {clashOpen && timeClash.size > 0 && (
+          <div className="absolute left-0 top-full mt-1 z-40 max-w-[48rem] max-h-64 overflow-y-auto rounded-lg border border-red-300 bg-red-50 px-3 py-2.5 text-sm text-red-800 shadow-lg space-y-1">
+            <div className="font-bold flex items-center gap-2">
+              ⚠ 同じ日の入れ替わりで時刻が合っていません（{timeClash.size}件）
+              <button onClick={() => setClashOpen(false)} className="ml-auto text-xs text-red-600 underline">閉じる</button>
+            </div>
+            <ul className="list-disc pl-5">
+              {[...timeClash.entries()].map(([k, c]) => (
+                <li key={k} className={c.unknown ? 'text-amber-800' : ''}>
+                  {k.split('|')[0].replace('-', '')}号　{mdOf(c.day)}：
+                  <b>{c.outName}</b> さん退所 {c.outTime || '（時刻未入力）'} →{' '}
+                  <b>{c.inName}</b> さん入所 {c.inTime || '（時刻未入力）'}
+                  {c.unknown ? '（時刻が入っていないので確認できません）' : '（前の人が出る前に次の人が入ります）'}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
 
       {/* 削除の履歴。消した予約は消さずに「削除ログ」シートへ積んであるので、あとからでも戻せる。 */}
       {trashOpen && (
@@ -1112,45 +1162,6 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
                 </tbody>
               </table>
             )}
-        </div>
-      )}
-
-      {/* ドラッグ中の行き先を文字でも出す（マスが小さいので取り違え防止）。
-          ⚠️ 画面の上に浮かせて出す。表の上に普通に置くと、出たり消えたりのたびに
-             チャートが上下にずれ、掴んでいたマスを見失う。
-             以前は高さ固定の枠（68px）を常に空けてこれを防いでいたが、ふだんは
-             空の1行に見えて邪魔だったので、枠をやめて浮かせる形にした（2026-09-30）。 */}
-      {drag && preview && (
-        <div className="rv-noprint fixed top-2 left-1/2 -translate-x-1/2 z-50 shadow-lg rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-sm text-sky-900 font-medium pointer-events-none">
-          🖐 {drag.rv.name} さん → <b>{preview.building}{pad2(preview.room)}号</b>
-          {mdOf(preview.start)} 〜 {mdOf(preview.end)}（{nightsOf(preview.start, preview.end)}泊）
-          {preview.start !== drag.rv.start && <span className="ml-2 text-sky-700">
-            ※ {mdOf(drag.rv.start)}〜 から {Math.round((new Date(preview.start).getTime() - new Date(drag.rv.start).getTime()) / 86400000) > 0 ? '＋' : ''}
-            {Math.round((new Date(preview.start).getTime() - new Date(drag.rv.start).getTime()) / 86400000)}日
-          </span>}
-        </div>
-      )}
-
-      {error && <div className="rv-noprint rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">⚠ {error}</div>}
-      {doubleBooked.size > 0 && (
-        <div className="rv-noprint rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
-          ⚠ 同じ人が同じ日に2部屋以上に入っています（表の赤いマス）。どちらかを直してください。
-        </div>
-      )}
-      {/* 時刻が合わない同日交代。食事のマスだけでは気づけないので、ここに一覧で出す。 */}
-      {timeClash.size > 0 && (
-        <div className="rv-noprint rounded-lg border border-red-300 bg-red-50 px-3 py-2.5 text-sm text-red-800 space-y-1">
-          <div className="font-bold">⚠ 同じ日の入れ替わりで時刻が合っていません（{timeClash.size}件）</div>
-          <ul className="list-disc pl-5 max-h-32 overflow-y-auto">
-            {[...timeClash.entries()].map(([k, c]) => (
-              <li key={k} className={c.unknown ? 'text-amber-800' : ''}>
-                {k.split('|')[0].replace('-', '')}号　{mdOf(c.day)}：
-                <b>{c.outName}</b> さん退所 {c.outTime || '（時刻未入力）'} →{' '}
-                <b>{c.inName}</b> さん入所 {c.inTime || '（時刻未入力）'}
-                {c.unknown ? '（時刻が入っていないので確認できません）' : '（前の人が出る前に次の人が入ります）'}
-              </li>
-            ))}
-          </ul>
         </div>
       )}
 
