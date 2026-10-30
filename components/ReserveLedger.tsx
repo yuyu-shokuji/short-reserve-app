@@ -101,6 +101,15 @@ const isoPlus = (iso: string, n: number) => {
 };
 // 食事管理アプリのショート全体一覧に合わせた列幅と食事行
 const OV_W = { bld: 26, room: 34, meal: 22 };
+
+/**
+ * 「仮置き」の部屋は、画面では「キャンセル待ち」と呼ぶ（2026-10-30 現場の指定）。
+ * ⚠️ スプレッドシートの棟名は「仮置き」のまま（予約シートの棟とつながっているので、名前を変えると切れる）。
+ *    出すところだけ言い換える。
+ */
+const STAGING_SHEET_NAME = '仮置き';
+const STAGING_LABEL = 'キャンセル待ち';
+const bldLabel = (name: string) => (name === STAGING_SHEET_NAME ? STAGING_LABEL : name);
 const DAY_MIN = 54;   // 日付列の最小幅(px)。これより狭くはせず横スクロールにする（食事管理アプリと同じ）
 const MEAL_ROWS: { key: MealKey; label: string; tint: string }[] = [
   { key: 'asa',  label: '朝', tint: 'bg-amber-50' },
@@ -211,9 +220,9 @@ function ConflictLine({ c }: { c: Conflict }) {
     );
   }
   if (c.kind === 'room') {
-    return <>同じ部屋（{c.other.building}{pad2(c.other.room)}号）に <b>{c.other.name}</b> さんの{c.other.status}：{span}</>;
+    return <>同じ部屋（{bldLabel(c.other.building)}{pad2(c.other.room)}号）に <b>{c.other.name}</b> さんの{c.other.status}：{span}</>;
   }
-  return <><b className="text-red-700">同じ人を別の部屋にも</b>：{c.other.name} さんは {c.other.building}{pad2(c.other.room)}号 にも{c.other.status}（{span}）</>;
+  return <><b className="text-red-700">同じ人を別の部屋にも</b>：{c.other.name} さんは {bldLabel(c.other.building)}{pad2(c.other.room)}号 にも{c.other.status}（{span}）</>;
 }
 
 const mdOf = (iso: string) => {
@@ -658,7 +667,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? '保存エラー');
       if (j.conflict) { setConflicts(j.conflicts); return; }
-      const label = `${form.name} さん（${form.building}${pad2(form.room)}号 ${form.start}〜${form.end}・${form.status}）`;
+      const label = `${form.name} さん（${bldLabel(form.building)}${pad2(form.room)}号 ${form.start}〜${form.end}・${form.status}）`;
       setConflicts(null); setForm(null);
       await load(true);
       setMsg(`✓ ${label} を保存しました`);
@@ -667,7 +676,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
 
   const doDelete = async () => {
     if (!form?.id) return;
-    if (!window.confirm(`${form.name} さん（${form.building}${pad2(form.room)}号 ${form.start}〜${form.end}）の予約を削除します。よろしいですか？\n（消したあと「↩ 削除を取り消す」で戻せます）`)) return;
+    if (!window.confirm(`${form.name} さん（${bldLabel(form.building)}${pad2(form.room)}号 ${form.start}〜${form.end}）の予約を削除します。よろしいですか？\n（消したあと「↩ 削除を取り消す」で戻せます）`)) return;
     setBusy(true); setMsg('');
     try {
       const res = await fetch('/api/reserve', {
@@ -707,7 +716,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
       if (!res.ok) throw new Error(j.error ?? '取り消しエラー');
       if (j.conflict) {
         setAsk({
-          title: `${rv.name} さん（${rv.building}${pad2(rv.room)}号 ${mdOf(rv.start)}〜${mdOf(rv.end)}）を戻すと重なります（まだ戻していません）`,
+          title: `${rv.name} さん（${bldLabel(rv.building)}${pad2(rv.room)}号 ${mdOf(rv.start)}〜${mdOf(rv.end)}）を戻すと重なります（まだ戻していません）`,
           conflicts: j.conflicts, confirmLabel: '重なったまま戻す',
           onConfirm: () => restoreDeleted(true, entry),
         });
@@ -717,7 +726,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
       if (!entry) setLastDelete(null);
       await load(true);
       if (trashOpen) await loadTrash();
-      setMsg(`↩ ${rv.name} さん（${rv.building}${pad2(rv.room)}号 ${mdOf(rv.start)}〜${mdOf(rv.end)}）の削除を取り消しました`);
+      setMsg(`↩ ${rv.name} さん（${bldLabel(rv.building)}${pad2(rv.room)}号 ${mdOf(rv.start)}〜${mdOf(rv.end)}）の削除を取り消しました`);
     } catch (e: any) { setMsg(`⚠ ${e.message}`); } finally { setBusy(false); }
   };
 
@@ -745,7 +754,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
       if (!res.ok) throw new Error(j.error ?? '移動エラー');
       if (j.conflict) {
         setAsk({
-          title: `${rv.name} さんを ${building}${pad2(room)}号 ${mdOf(start)}〜${mdOf(end)} へ移すと重なります（まだ動かしていません）`,
+          title: `${rv.name} さんを ${bldLabel(building)}${pad2(room)}号 ${mdOf(start)}〜${mdOf(end)} へ移すと重なります（まだ動かしていません）`,
           conflicts: j.conflicts, confirmLabel: '重なったまま移す',
           onConfirm: () => moveReservation(rv, building, room, start, end, { force: true }),
         });
@@ -757,8 +766,8 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
         : { id: rv.id, name: rv.name, building: rv.building, room: rv.room, start: rv.start, end: rv.end });
       await load(true);
       setMsg(opts?.undo
-        ? `↩ ${rv.name} さんを ${building}${pad2(room)}号 ${mdOf(start)}〜${mdOf(end)} に戻しました`
-        : `✓ ${rv.name} さんを ${building}${pad2(room)}号 ${mdOf(start)}〜${mdOf(end)} へ移しました`);
+        ? `↩ ${rv.name} さんを ${bldLabel(building)}${pad2(room)}号 ${mdOf(start)}〜${mdOf(end)} に戻しました`
+        : `✓ ${rv.name} さんを ${bldLabel(building)}${pad2(room)}号 ${mdOf(start)}〜${mdOf(end)} へ移しました`);
     } catch (e: any) { setMsg(`⚠ ${e.message}`); } finally { setBusy(false); }
   };
 
@@ -1201,7 +1210,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
         <div className="h-9 flex items-center gap-2 overflow-x-auto overflow-y-hidden whitespace-nowrap">
           {lastDelete && (
             <button disabled={busy} onClick={() => restoreDeleted()}
-              title={`${lastDelete.name} さん ${lastDelete.building}${pad2(lastDelete.room)}号 ${lastDelete.start}〜${lastDelete.end}`}
+              title={`${lastDelete.name} さん ${bldLabel(lastDelete.building)}${pad2(lastDelete.room)}号 ${lastDelete.start}〜${lastDelete.end}`}
               className="shrink-0 rounded-lg bg-red-600 text-white px-2.5 py-1 text-sm font-bold hover:bg-red-700 disabled:opacity-40">
               ↩ 削除を取り消す（{lastDelete.name}）
             </button>
@@ -1234,7 +1243,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
           {/* ドラッグ中の行き先を文字でも出す（マスが小さいので取り違え防止） */}
           {drag && preview && (
             <span className="shrink-0 rounded-lg border border-sky-300 bg-sky-50 px-2.5 py-1 text-sm text-sky-900 font-medium">
-              🖐 {drag.rv.name} さん → <b>{preview.building}{pad2(preview.room)}号</b>
+              🖐 {drag.rv.name} さん → <b>{bldLabel(preview.building)}{pad2(preview.room)}号</b>
               {' '}{mdOf(preview.start)} 〜 {mdOf(preview.end)}（{nightsOf(preview.start, preview.end)}泊）
               {preview.start !== drag.rv.start && <span className="ml-2 text-sky-700">
                 ※ {Math.round((new Date(preview.start).getTime() - new Date(drag.rv.start).getTime()) / 86400000) > 0 ? '＋' : ''}
@@ -1289,7 +1298,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
                     <tr key={`${t.id}-${i}`} className={`border-t border-gray-100 ${t.undone ? 'text-gray-400' : ''}`}>
                       <td className="px-3 py-1.5 tabular-nums text-xs">{t.deletedAt}</td>
                       <td className="px-2 py-1.5 font-medium">{t.name}</td>
-                      <td className="px-2 py-1.5">{t.building}{pad2(t.room)}</td>
+                      <td className="px-2 py-1.5">{bldLabel(t.building)}{pad2(t.room)}</td>
                       <td className="px-2 py-1.5 tabular-nums text-xs">{t.start} 〜 {t.end}</td>
                       <td className="px-2 py-1.5 text-xs">{t.status}</td>
                       <td className="px-2 py-1.5 text-xs text-gray-500">{t.note}</td>
@@ -1317,7 +1326,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
             <button disabled={busy} onClick={ask.onConfirm}
               className="px-3 py-1.5 rounded-lg bg-red-600 text-white font-bold hover:bg-red-700 disabled:opacity-40">{ask.confirmLabel}</button>
             <button disabled={busy} onClick={() => setAsk(null)} className="px-2 py-1.5 text-amber-700 underline">やめる</button>
-            <span className="text-xs text-amber-700">※ 入れ替えたいときは、先に片方を「仮置き」へ逃がしてください</span>
+            <span className="text-xs text-amber-700">※ 入れ替えたいときは、先に片方を「キャンセル待ち」へ逃がしてください</span>
           </div>
           <ul className="list-disc pl-5 max-h-40 overflow-y-auto">
             {ask.conflicts.map((c, i) => (
@@ -1385,7 +1394,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
                 : <span className="text-slate-700">
                     この期間に空いている部屋：<b className="text-emerald-700">{freeList.length}室</b>
                     <span className="text-xs text-slate-500 ml-2">
-                      {freeList.map(v => `${v.building}${pad2(v.room)}`).join('・')}
+                      {freeList.map(v => `${bldLabel(v.building)}${pad2(v.room)}`).join('・')}
                     </span>
                   </span>}
           </div>
@@ -1402,7 +1411,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
               <span className="font-semibold">棟</span>
               <select value={form.building} onChange={e => patch({ building: e.target.value })}
                 className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-sm bg-white">
-                {buildings.map(b => <option key={b.name} value={b.name}>{b.name}</option>)}
+                {buildings.map(b => <option key={b.name} value={b.name}>{bldLabel(b.name)}</option>)}
               </select>
             </label>
             <label className="text-xs text-gray-600 space-y-1 col-span-2 order-last">
@@ -1539,7 +1548,8 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
               {(() => {
                 /**
                  * 並び順（2026-09-22 現場の結論）
-                 *   日付 → さくら計 → さくら → 日付 → 仮置き01 → すみれ計 → すみれ → 仮置き02 → 空き
+                 *   日付 → さくら計 → さくら → キャンセル待ち01 → 日付 → すみれ計 → すみれ → キャンセル待ち02
+                 *   （キャンセル待ち＝シート上の「仮置き」）
                  * ・日付行を棟の間にも入れる（下のほうで日付を見失わないように）
                  * ・仮置きを棟の間にも置く（入れ替えのとき遠くまで運ばなくてよいように）
                  * ・棟の合計は日付行のすぐ下。一番下に置くと日付と見間違えるため。
@@ -1613,8 +1623,16 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
                           <tr key={mr.key}
                             className={`rv-mealrow ${mi === MEAL_ROWS.length - 1 ? 'rv-roomend' : ''} ${
                               mi === MEAL_ROWS.length - 1 && o.endsGroup ? 'rv-bldend' : ''}`}>
-                            {o.bldSpan && mi === 0 && bldTh(b.name, b.staging, o.bldSpan)}
-                            {mi === 0 && (
+                            {/* キャンセル待ちは「キャンセル待ち 01」を棟と部屋の2列ぶんで出す
+                                （26px幅の棟の列だけでは7文字が縦に収まらず、行が伸びてしまうため） */}
+                            {o.bldSpan && mi === 0 && b.staging && (
+                              <th rowSpan={o.bldSpan} colSpan={2} style={{ left: 0 }}
+                                className="rv-fix rv-roomend px-0.5 py-1 text-[10px] leading-tight font-bold bg-slate-200 text-slate-700">
+                                キャンセル<br />待ち {pad2(rm.room)}
+                              </th>
+                            )}
+                            {o.bldSpan && mi === 0 && !b.staging && bldTh(b.name, b.staging, o.bldSpan)}
+                            {mi === 0 && !(o.bldSpan && b.staging) && (
                               <th rowSpan={MEAL_ROWS.length} style={{ left: OV_W.bld }}
                                 className={`rv-fix px-1 py-1 font-bold rv-roomend ${
                                   rm.disabled ? 'bg-gray-100 text-gray-300'
@@ -1673,7 +1691,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
                               const dnd = inPreview ? 'outline outline-2 outline-sky-600 bg-sky-200 ' : '';
 
                               const oneTitle = (x: Reservation) =>
-                                `${x.name}（${x.status}）${b.name}${pad2(rm.room)}号 ${x.start}〜${x.end}`
+                                `${x.name}（${x.status}）${bldLabel(b.name)}${pad2(rm.room)}号 ${x.start}〜${x.end}`
                                 + (x.inTime ? ` / 入所 ${x.inTime}` : '') + (x.outTime ? ` / 退所 ${x.outTime}` : '')
                                 + (x.soutaiIn ? ` / 入所${x.soutaiIn}` : '') + (x.soutaiOut ? ` / 退所${x.soutaiOut}` : '')
                                 + (x.note ? ` / ${x.note}` : '');
@@ -1789,7 +1807,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
               {listRows.map(r => (
                 <tr key={r.id} className="border-t border-gray-100">
                   <td className="px-3 py-1.5 font-medium text-gray-800">{r.name}</td>
-                  <td className="px-2 py-1.5 text-gray-600">{r.building}{pad2(r.room)}</td>
+                  <td className="px-2 py-1.5 text-gray-600">{bldLabel(r.building)}{pad2(r.room)}</td>
                   {/* 紙（A4縦）は幅が足りないので月日だけにする */}
                   <td className="px-2 py-1.5 text-gray-600 tabular-nums whitespace-nowrap">
                     <span className="print:hidden">{r.start} 〜 {r.end}</span>
@@ -1818,8 +1836,8 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
 
       <p className="rv-noprint text-xs text-gray-400">
         ※ <b>予約のマスはつまんで動かせます</b>（部屋替えと日付ずらしが同時にできます。塊ごと動き、泊数は変わりません）。
-        動かす先が埋まっているときは確認してから動かします。入れ替えたいときは、先に片方を<b>「仮置き」</b>へ逃がしてください
-        （仮置きは実在しない部屋なので、空き部屋数や空き検索には出ません）。
+        動かす先が埋まっているときは確認してから動かします。入れ替えたいときは、先に片方を<b>「キャンセル待ち」</b>へ逃がしてください
+        （キャンセル待ちは実在しない部屋なので、空き部屋数や空き検索には出ません）。
         移動は「↩ 直前の移動を戻す」、削除は「↩ 削除を取り消す」で、それぞれ直前の1回を取り消せます。
         <b>消した予約は「削除ログ」シートに残る</b>ので、あとから気づいたときも「🗑 削除履歴」からいつでも戻せます
         （消したときと同じ内容・同じ行で戻ります）。
