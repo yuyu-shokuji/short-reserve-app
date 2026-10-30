@@ -1540,7 +1540,10 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
                         : name === 'さくら' ? 'bg-rose-50 text-rose-700' : 'bg-purple-50 text-purple-700'}`}>{name}</th>
                 );
 
-                /** 棟の間にも入れる日付行。見出しと同じ並びだが、こちらは動かない普通の行。 */
+                /**
+                 * 棟の間にも入れる日付行。見出しと同じ並びだが、こちらは動かない普通の行。
+                 * 見出し（さくらの上）と同じく、日付の下に曜日も出す（2026-10-30 現場の指定）。
+                 */
                 const dateRow = (key: string) => (
                   <tr key={key} className="rv-daterow">
                     <th colSpan={3} style={{ left: 0 }}
@@ -1550,7 +1553,9 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
                       const isToday = isoOf(year, month, d) === today;
                       return (
                         <th key={d} className={`rv-dayhead ${w === '日' || w === '土' ? 'rv-we ' : ''}px-0.5 py-0.5 text-[10px] font-semibold ${
-                          dowColor(w)} ${isToday ? 'bg-emerald-100' : dowBg(w) || 'bg-gray-100'}`}>{d}</th>
+                          dowColor(w)} ${isToday ? 'bg-emerald-100' : dowBg(w) || 'bg-gray-100'}`}>
+                          <div>{d}</div><div className="text-[9px] font-normal">{w}</div>
+                        </th>
                       );
                     })}
                   </tr>
