@@ -12,6 +12,11 @@
 //   中日   … 朝・昼・夕
 //   おやつ … 昼と連動（昼が出る日は出る）
 //
+// 時刻が決まっていないことが多いので、時刻のかわりに「午前」「午後」も入れられる（2026-10-30）。
+//   入所 午前 → 昼・夕 ／ 午後 → 夕のみ
+//   退所 午前 → 朝のみ ／ 午後 → 朝・昼
+//   新しい予約の既定は 入所＝午前・退所＝午後。
+//
 // 食事の無いマスは「薄字で名前」ではなく空にする。その部屋はその食事の時間帯には
 // 空いていて、次の人を受け入れられるため（＝チャート上も空きとして見えてほしい）。
 //
@@ -35,9 +40,28 @@ export function minutesOf(t: string): number | null {
 
 const HH = (h: number, m = 0) => h * 60 + m;
 
+/** 時刻のかわりに入れられる、おおまかな時間帯。 */
+export const AM = '午前', PM = '午後';
+export const isAmPm = (t: string) => t === AM || t === PM;
+
+/**
+ * 時刻がとりうる範囲（分）。"HH:MM" ならその1点、午前＝0:00〜11:59、午後＝12:00〜23:59。
+ * 空や不正なら null。同日交代のチェック（lib/overlap.ts）で使う。
+ */
+export function rangeOf(t: string): [number, number] | null {
+  const v = String(t ?? '').trim();
+  if (v === AM) return [0, HH(11, 59)];
+  if (v === PM) return [HH(12), HH(23, 59)];
+  const m = minutesOf(v);
+  return m === null ? null : [m, m];
+}
+
 /** 退所日に出す食事。18:30より前なら夕は不要、11:30以前なら昼も不要。 */
 export function mealsOnCheckout(outTime: string): Meals {
-  const t = minutesOf(outTime);
+  const v = String(outTime ?? '').trim();
+  if (v === AM) return { asa: true, hiru: false, yu: false };
+  if (v === PM) return { asa: true, hiru: true, yu: false };
+  const t = minutesOf(v);
   if (t === null) return { asa: true, hiru: true, yu: false };   // 時刻未入力＝夕は出さない
   if (t <= HH(11, 30)) return { asa: true, hiru: false, yu: false };
   if (t < HH(18, 30)) return { asa: true, hiru: true, yu: false };
@@ -46,7 +70,10 @@ export function mealsOnCheckout(outTime: string): Meals {
 
 /** 入所日に出す食事。入所日は朝食を食べない。13:00以降の入所なら昼も不要。 */
 export function mealsOnCheckin(inTime: string): Meals {
-  const t = minutesOf(inTime);
+  const v = String(inTime ?? '').trim();
+  if (v === AM) return { asa: false, hiru: true, yu: true };
+  if (v === PM) return { asa: false, hiru: false, yu: true };
+  const t = minutesOf(v);
   if (t !== null && t >= HH(13)) return { asa: false, hiru: false, yu: true };
   return { asa: false, hiru: true, yu: true };
 }

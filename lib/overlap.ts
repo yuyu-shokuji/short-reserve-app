@@ -5,18 +5,18 @@
 // ポイントは「退所日と入所日が同じ日でも、時刻しだいで入れ替われるとは限らない」こと。
 //   例）さくら01 を 11:00 に退所 → 13:00 入所の人はOK、10:00 入所の人はNG。
 
-import { minutesOf } from './meal-rule';
+import { rangeOf } from './meal-rule';
 
 export interface Span {
   start: string; end: string;      // YYYY-MM-DD
-  inTime: string; outTime: string; // HH:MM（空のことがある）
+  inTime: string; outTime: string; // HH:MM か 午前／午後（空のことがある）
 }
 
 export type OverlapKind =
   | 'none'               // 重ならない
   | 'handover-ok'        // 同日交代で時刻も問題なし
   | 'handover-clash'     // 同日交代だが、前の人の退所より先に次の人が入る
-  | 'handover-unknown'   // 同日交代だが、時刻が未入力で確かめられない
+  | 'handover-unknown'   // 同日交代だが、時刻が未入力・午前午後だけで確かめられない
   | 'overlap';           // 期間がまるごと重なっている
 
 const dayList = (s: string, e: string): string[] => {
@@ -63,12 +63,16 @@ export function classifyOverlap(a: Span, b: Span): OverlapResult {
   else if (b.end === d && a.start === d && a.end !== d) { leaving = b; arriving = a; }
   if (!leaving || !arriving) return { kind: 'overlap', days };
 
-  const out = minutesOf(leaving.outTime);
-  const inn = minutesOf(arriving.inTime);
+  const out = rangeOf(leaving.outTime);
+  const inn = rangeOf(arriving.inTime);
   const hv = { out: leaving, outTime: leaving.outTime, in: arriving, inTime: arriving.inTime, day: d };
   if (out === null || inn === null) return { kind: 'handover-unknown', days, handover: hv };
-  // 前の人が出てから次の人が入るならOK（同時刻ちょうどは可とする）
-  return { kind: out <= inn ? 'handover-ok' : 'handover-clash', days, handover: hv };
+  // 前の人が出てから次の人が入るならOK（同時刻ちょうどは可とする）。
+  // 午前／午後は幅のある時刻として比べる。午前退所→午後入所はOK、午後退所→午前入所はNG、
+  // 同じ午前どうしなどは前後が決まらないので「確かめられない」。
+  if (out[1] <= inn[0]) return { kind: 'handover-ok', days, handover: hv };
+  if (out[0] > inn[1]) return { kind: 'handover-clash', days, handover: hv };
+  return { kind: 'handover-unknown', days, handover: hv };
 }
 
 /** 保存してよいか（重なりとして知らせるべきか） */

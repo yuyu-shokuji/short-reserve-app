@@ -12,7 +12,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Person } from './ReserveApp';
-import { mealsFor, MEAL_KEYS, type MealKey } from '@/lib/meal-rule';
+import { mealsFor, MEAL_KEYS, minutesOf, AM, PM, isAmPm, type MealKey } from '@/lib/meal-rule';
 import { classifyOverlap } from '@/lib/overlap';
 
 type SoutaiKind = '' | '送迎あり' | '家族送迎';
@@ -128,18 +128,27 @@ const MIN_OPTS = Array.from({ length: 12 }, (_, i) => pad2(i * 5));   // 00,05,�
  * 時刻の入力欄。「時」と「分」のプルダウン2つに分ける。
  * type="time" だと分が1分刻みで出てしまい、現場では選びにくいため。
  * 分は5分刻み。時を選んだときに分が空なら 00 を入れる。
+ * 時刻が決まっていないことが多いので、「時」の先頭で 午前／午後 も選べる（2026-10-30 現場の指定）。
+ * 午前・午後のときは分の欄は使わない。
  */
 function TimeSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const m = /^(\d{1,2}):(\d{1,2})$/.exec(String(value ?? '').trim());
+  const v = String(value ?? '').trim();
+  const ampm = isAmPm(v);
+  const m = /^(\d{1,2}):(\d{1,2})$/.exec(v);
   const h = m ? pad2(Number(m[1])) : '';
   // シートに5分刻みでない値が入っていても、いちばん近い選択肢を出す
   const mi = m ? pad2(Math.min(55, Math.round(Number(m[2]) / 5) * 5)) : '';
   const sel = 'border border-gray-200 rounded-md px-2 py-1.5 text-sm bg-white';
   return (
     <span className="inline-flex items-center gap-1">
-      <select value={h} className={sel}
-        onChange={e => onChange(e.target.value ? `${e.target.value}:${mi || '00'}` : '')}>
+      <select value={ampm ? v : h} className={sel}
+        onChange={e => {
+          const x = e.target.value;
+          onChange(!x ? '' : isAmPm(x) ? x : `${x}:${mi || '00'}`);
+        }}>
         <option value="">--</option>
+        <option value={AM}>{AM}</option>
+        <option value={PM}>{PM}</option>
         {HOUR_OPTS.map(o => <option key={o} value={o}>{o}</option>)}
       </select>
       <span className="text-gray-400">:</span>
@@ -157,7 +166,9 @@ function ConflictLine({ c }: { c: Conflict }) {
   const span = `${mdOf(c.days[0])}〜${mdOf(c.days[c.days.length - 1])}`;
   if (c.kind === 'handover' && c.detail) {
     const d = c.detail;
-    const unknown = !d.outTime || !d.inTime;
+    // 両方とも「何時何分」で入っているのに出ているなら、本当に合っていない。
+    // どちらかが空や 午前／午後 だけなら、前後が決められないだけ。
+    const unknown = minutesOf(d.outTime) === null || minutesOf(d.inTime) === null;
     return (
       <>
         <b className={unknown ? 'text-amber-800' : 'text-red-700'}>
@@ -165,7 +176,7 @@ function ConflictLine({ c }: { c: Conflict }) {
         </b>
         ：{mdOf(d.day)} に <b>{d.outName}</b> さんが退所 {d.outTime || '（時刻未入力）'}、
         <b>{d.inName}</b> さんが入所 {d.inTime || '（時刻未入力）'}
-        {unknown ? '（どちらかの時刻を入れると判定できます）' : '（前の人が出る前に次の人が入ります）'}
+        {unknown ? '（何時何分まで入れると判定できます）' : '（前の人が出る前に次の人が入ります）'}
       </>
     );
   }
@@ -582,8 +593,8 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
     setPanelSide(sideFor(iso));
     setForm({
       id: '', name: '', building, room, start: iso, end: iso,
-      // 時刻の既定値。空にすると時刻欄が「いまの時刻」から始まって使いにくいため。
-      status: '仮予約', inTime: '09:00', soutaiIn: '', outTime: '16:00', soutaiOut: '', note: '',
+      // 時刻の既定値。決まっていないことが多いので 入所＝午前・退所＝午後（2026-10-30 現場の指定）。
+      status: '仮予約', inTime: AM, soutaiIn: '', outTime: PM, soutaiOut: '', note: '',
     });
     setConflicts(null); setMsg('');
   };
@@ -914,12 +925,18 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `記録表${form === '1' ? '①' : '②'}_${recDay}.xlsx`;
+      // ファイル名は中身に合わせて「選んだ日〜翌日」（サーバーが付けた名前を使う）
+      const cd = res.headers.get('Content-Disposition') ?? '';
+      const fm = /filename\*=UTF-8''([^;]+)/.exec(cd);
+      a.download = fm ? decodeURIComponent(fm[1]) : `記録表${form === '1' ? '①' : '②'}_${recDay}.xlsx`;
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      setMsg(`記録表${form === '1' ? '①' : '②'}（${recDay}）を作りました。${res.headers.get('X-Filled-Count') ?? ''}名`);
+      const [ry, rm, rd] = recDay.split('-').map(Number);
+      const nx = new Date(ry, rm - 1, rd + 1);
+      setMsg(`記録表${form === '1' ? '①' : '②'}（${rm}/${rd}・${nx.getMonth() + 1}/${nx.getDate()}）を作りました。`
+        + 'ユニットごとに2日が表裏になる順です（両面印刷）。');
     } catch (e: any) {
       setError(e.message || '記録表の作成に失敗しました');
     } finally { setBusy(false); }
@@ -1120,9 +1137,10 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
             Excelを作る
           </button>
         </span>
-        {/* 記録表①②。1日ぶんを Excel で落とす（1シートにさくらとすみれ）。 */}
+        {/* 記録表①②。選んだ日と翌日の2日ぶんを Excel で落とす。
+            ユニットごとに使うので、さくら1日目・さくら2日目・すみれ1日目・すみれ2日目 の順（両面で表裏）。 */}
         <span className="inline-flex items-center gap-1 rounded-lg bg-violet-50 border border-violet-200 px-2 py-1"
-          title="選んだ日の記録表を Excel で作ります。各部屋の利用者名と来所・帰所が入ります。">
+          title="選んだ日と翌日の記録表を Excel で作ります。両面印刷すると、ユニットごとに1日目が表・2日目が裏になります。各部屋の利用者名と来所・帰所が入ります。">
           <span className="text-xs font-semibold text-violet-800">📋 記録表</span>
           <input type="date" value={recDay} onChange={e => setRecDay(e.target.value)}
             className="border border-violet-300 rounded px-1 py-1 text-xs bg-white" />
@@ -1199,7 +1217,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
                   {k.split('|')[0].replace('-', '')}号　{mdOf(c.day)}：
                   <b>{c.outName}</b> さん退所 {c.outTime || '（時刻未入力）'} →{' '}
                   <b>{c.inName}</b> さん入所 {c.inTime || '（時刻未入力）'}
-                  {c.unknown ? '（時刻が入っていないので確認できません）' : '（前の人が出る前に次の人が入ります）'}
+                  {c.unknown ? '（時刻がはっきりしないので確認できません）' : '（前の人が出る前に次の人が入ります）'}
                 </li>
               ))}
             </ul>

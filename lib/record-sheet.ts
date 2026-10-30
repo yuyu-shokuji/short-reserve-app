@@ -1,4 +1,9 @@
-// 予約から「ショートステイ 記録表①／②」を1日ぶん作る。
+// 予約から「ショートステイ 記録表①／②」を作る。
+//
+// ⚠️ 記録表はユニットごとに使うので、1枚の表裏が「同じユニットの連続した2日」になるように並べる
+//    （2026-10-30 現場の指定。以前は表＝さくら・裏＝すみれ の同じ日だった）。
+//    選んだ日と翌日の2日ぶんを、さくら1日目 → さくら2日目 → すみれ1日目 → すみれ2日目 の順に
+//    1ページずつ積む。両面印刷すると、さくら1枚・すみれ1枚 に分かれる。
 //
 // 様式は罫線・結合・フォントが細かいので、現場の見本から取り出したひな形
 // （lib/record-templates/rec1.json・rec2.json）をそのまま敷き直している。
@@ -61,8 +66,10 @@ function tplStyle(t: Template, r: number, c: number) {
   return cl?.s !== undefined ? t.styles[cl.s] : {};
 }
 
-/** その日、どの部屋に誰がいるか。棟 → 部屋番号 → 予約。 */
-async function occupantsOf(day: string) {
+interface Stay { name: string; start: string; end: string; inTime: string; outTime: string; key: string }
+
+/** ユニットの並びと、予約の一覧。1回だけ読んで、日ごとの在室は occupantsOn で拾う。 */
+async function loadStays() {
   const data = await readSheets([SHEET.reserve, SHEET.rooms]);
   const cell = (r: any[], i: number) => String(r?.[i] ?? '').trim();
   const head = (rows: any[][]) => (rows[0] ?? []).map((c: any) => String(c ?? '').trim());
@@ -78,23 +85,40 @@ async function occupantsOf(day: string) {
 
   const resRows = data[SHEET.reserve] ?? [];
   const ph = head(resRows);
-  const by = new Map<string, { name: string; start: string; end: string; inTime: string; outTime: string }>();
+  const stays: Stay[] = [];
   for (const r of resRows.slice(1)) {
     const name = cell(r, ph.indexOf('氏名'));
     const start = cell(r, ph.indexOf('開始日'));
     const end = cell(r, ph.indexOf('終了日'));
     if (!name || !start || !end) continue;
-    if (day < start || day > end) continue;
-    by.set(`${cell(r, ph.indexOf('棟'))}-${Number(r[ph.indexOf('部屋')])}`, {
+    stays.push({
       name, start, end,
       inTime: cell(r, ph.indexOf('入所時間')),
       outTime: cell(r, ph.indexOf('退所時間')),
+      key: `${cell(r, ph.indexOf('棟'))}-${Number(r[ph.indexOf('部屋')])}`,
     });
   }
-  return { units, by };
+  return { units, stays };
 }
 
-/** 来所・帰所の欄。入所日なら来所、退所日なら帰所。時刻が無ければ枠だけ。 */
+/** その日、どの部屋に誰がいるか。「棟-部屋番号」→ 予約。 */
+function occupantsOn(stays: Stay[], day: string) {
+  const by = new Map<string, Stay>();
+  for (const s of stays) if (day >= s.start && day <= s.end) by.set(s.key, s);
+  return by;
+}
+
+/** 翌日（YYYY-MM-DD）。 */
+function nextDay(day: string): string {
+  const [y, m, d] = day.split('-').map(Number);
+  const x = new Date(y, m - 1, d + 1);
+  return `${x.getFullYear()}-${pad2(x.getMonth() + 1)}-${pad2(x.getDate())}`;
+}
+
+/**
+ * 来所・帰所の欄。入所日なら来所、退所日なら帰所。時刻が無ければ枠だけ。
+ * 午前／午後しか決まっていないときは「来所午前」のようにそのまま出す。
+ */
 function visitLabel(day: string, o?: { start: string; end: string; inTime: string; outTime: string }): string {
   if (!o) return '';
   const parts: string[] = [];
@@ -105,17 +129,20 @@ function visitLabel(day: string, o?: { start: string; end: string; inTime: strin
 
 export interface RecordSheet { buffer: Buffer; filename: string; day: string; filled: number; }
 
-/** 日付を渡すと、その日の記録表（①か②）を組み立てて返す。 */
+/** 日付を渡すと、その日と翌日の記録表（①か②）を、ユニットごとに表裏になる順で組み立てて返す。 */
 export async function buildRecordSheet(day: string, form: FormKey): Promise<RecordSheet> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error('日付は YYYY-MM-DD で渡してください');
   const f = FORMS[form];
   const t = f.tpl;
   const [y, m, d] = day.split('-').map(Number);
-  const dow = WD[new Date(y, m - 1, d).getDay()];
-  const { units, by } = await occupantsOf(day);
+  const day2 = nextDay(day);
+  const [, m2, d2] = day2.split('-').map(Number);
+  const { units, stays } = await loadStays();
+  // 1ページ＝1ユニット×1日。ユニットの中で日付を並べる（表＝1日目、裏＝2日目）。
+  const pages = units.flatMap(unit => [day, day2].map(pd => ({ unit, day: pd })));
 
   // ⚠️ 印刷は見本のまま（等倍）。「ページに合わせる」を付けると縮んで行が低くなり、
-  //    棟ごとに1枚へきれいに分かれなくなる。
+  //    1ページずつきれいに分かれなくなる。
   const pageSetup: any = {
     orientation: t.page.orientation,
     paperSize: t.page.paperSize,
@@ -131,14 +158,17 @@ export async function buildRecordSheet(day: string, form: FormKey): Promise<Reco
 
   const wb = new ExcelJS.Workbook();
   wb.creator = 'グラン悠遊 ショート予約台帳';
-  const ws = wb.addWorksheet(`${m}月${d}日`, { pageSetup });
+  const ws = wb.addWorksheet(`${m}月${d}日・${m2}月${d2}日`, { pageSetup });
 
   if (t.defaultRowHeight) ws.properties.defaultRowHeight = t.defaultRowHeight;
   for (const [c, w] of Object.entries(t.colWidths)) ws.getColumn(Number(c)).width = w;
 
   let filled = 0;
-  units.forEach((unit, ui) => {
-    const off = ui * t.rows;                       // 棟ごとに1ブロックずつ下へ積む
+  pages.forEach(({ unit, day: pd }, pi) => {
+    const off = pi * t.rows;                       // 1ページずつ下へ積む
+    const [py, pm, pdd] = pd.split('-').map(Number);
+    const dow = WD[new Date(py, pm - 1, pdd).getDay()];
+    const by = occupantsOn(stays, pd);
 
     for (const [r, h] of Object.entries(t.rowHeights)) ws.getRow(off + Number(r)).height = h;
 
@@ -150,9 +180,9 @@ export async function buildRecordSheet(day: string, form: FormKey): Promise<Reco
     for (const [r1, c1, r2, c2] of t.merges) ws.mergeCells(off + r1, c1, off + r2, c2);
 
     // 日付
-    ws.getCell(off + 1, f.date.year).value = `${y}年`;
-    ws.getCell(off + 1, f.date.month).value = m;
-    ws.getCell(off + 1, f.date.day).value = d;
+    ws.getCell(off + 1, f.date.year).value = `${py}年`;
+    ws.getCell(off + 1, f.date.month).value = pm;
+    ws.getCell(off + 1, f.date.day).value = pdd;
     if (f.dayUnit) {
       // 「日」はひな形の「月」と同じ見た目、曜日はひな形の曜日セルの見た目を引き継ぐ
       const u = ws.getCell(off + 1, f.dayUnit);
@@ -178,17 +208,18 @@ export async function buildRecordSheet(day: string, form: FormKey): Promise<Reco
       const o = by.get(`${unit}-${no}`);
       ws.getCell(r, f.colName).value = o ? o.name : null;
       if (o) filled++;
-      if (f.colVisit) ws.getCell(r, f.colVisit).value = visitLabel(day, o) || null;
+      if (f.colVisit) ws.getCell(r, f.colVisit).value = visitLabel(pd, o) || null;
     });
 
-    // 棟の切れ目で改ページ。1枚に1棟ずつ刷れるようにする。
-    if (ui < units.length - 1) ws.getRow(off + t.rows).addPageBreak();
+    // 1ページずつ改ページ。両面印刷で、同じユニットの1日目と2日目が表裏になる。
+    if (pi < pages.length - 1) ws.getRow(off + t.rows).addPageBreak();
   });
 
   const buf = await wb.xlsx.writeBuffer();
+  const tail = m2 === m ? pad2(d2) : `${pad2(m2)}-${pad2(d2)}`;
   return {
     buffer: Buffer.from(buf as ArrayBuffer),
-    filename: `${f.label}_${y}-${pad2(m)}-${pad2(d)}.xlsx`,
+    filename: `${f.label}_${y}-${pad2(m)}-${pad2(d)}〜${tail}.xlsx`,
     day, filled,
   };
 }

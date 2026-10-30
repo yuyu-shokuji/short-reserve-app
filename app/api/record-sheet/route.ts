@@ -4,7 +4,7 @@ import { buildRecordSheet, FormKey } from '@/lib/record-sheet';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';   // exceljs は Node の Buffer を使うので Edge では動かない
 
-/** 記録表（1日ぶん）を xlsx で返す。/api/record-sheet?day=2026-10-09&form=1 */
+/** 記録表（選んだ日と翌日の2日ぶん）を xlsx で返す。/api/record-sheet?day=2026-10-09&form=1 */
 export async function GET(req: NextRequest) {
   try {
     const day = req.nextUrl.searchParams.get('day') ?? '';
