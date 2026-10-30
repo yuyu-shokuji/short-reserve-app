@@ -14,6 +14,7 @@ import {
 } from './sheets';
 import { classifyOverlap, isBlocking, type Span } from './overlap';
 import { parseMeds, formatMeds, type MedKey } from './meds';
+import { parseSoutai, normSoutai, type SoutaiKind } from './soutai';
 
 // 送迎は入所時と退所時で違うことがあるので別々に持つ（2026-09-22に1つから分けた）
 const COLS = ['ID', '氏名', '棟', '部屋', '開始日', '終了日', '状態',
@@ -21,8 +22,8 @@ const COLS = ['ID', '氏名', '棟', '部屋', '開始日', '終了日', '状態
 
 export type ReserveStatus = '仮予約' | '確定';
 
-/** 送迎の区分。'' ＝なし。家族送迎は画面で「FA」と出す。 */
-export type SoutaiKind = '' | '送迎あり' | '家族送迎';
+/** 送迎の区分は lib/soutai.ts（送迎あり／家族送迎(FA)／デイ送迎(DS)／他デイ送迎(他DS)）。 */
+export type { SoutaiKind };
 
 export interface Reservation {
   id: string;
@@ -42,13 +43,6 @@ export interface Reservation {
   rowIdx: number;      // シート上の行（0始まり・内部用）
 }
 
-/** シートの表記ゆれを吸収する（'あり' など古い書き方も拾う） */
-function parseSoutai(raw: string): SoutaiKind {
-  const s = raw.trim();
-  if (!s || s === 'なし') return '';
-  if (s.includes('家族')) return '家族送迎';
-  return '送迎あり';
-}
 
 export interface Room {
   building: string;
@@ -487,7 +481,7 @@ export async function saveReservation(p: SaveParams): Promise<string> {
   put('終了日', p.end);
   put('状態', p.status === '確定' ? '確定' : '仮予約');
   // 送迎の有無と入退所の時間は独立。送迎なしでも時間は残す。
-  const soutaiVal = (v?: SoutaiKind) => (v === '家族送迎' ? '家族送迎' : v === '送迎あり' ? '送迎あり' : '');
+  const soutaiVal = (v?: SoutaiKind) => normSoutai(v);
   put('入所時間', (p.inTime ?? '').trim());
   put('入所送迎', soutaiVal(p.soutaiIn));
   put('退所時間', (p.outTime ?? '').trim());

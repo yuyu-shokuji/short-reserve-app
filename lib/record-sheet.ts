@@ -17,6 +17,7 @@ import rec1 from './record-templates/rec1.json';
 import rec2 from './record-templates/rec2.json';
 import { MED_INTERNAL, MED_EYE, MED_COL, MED_WHEN, parseMeds, type MedKey } from './meds';
 import { mealsFor } from './meal-rule';
+import { parseSoutai, withAbbr, SOUTAI_ABBR, type SoutaiKind } from './soutai';
 
 const WD = ['日', '月', '火', '水', '木', '金', '土'];
 const pad2 = (n: number) => String(n).padStart(2, '0');
@@ -72,7 +73,7 @@ function tplStyle(t: Template, r: number, c: number) {
 
 interface Stay {
   name: string; start: string; end: string; inTime: string; outTime: string; key: string;
-  soutaiIn: string; soutaiOut: string;   // 入所送迎／退所送迎（「家族送迎」なら FA）
+  soutaiIn: SoutaiKind; soutaiOut: SoutaiKind;   // 入所送迎／退所送迎（lib/soutai.ts）
 }
 
 /** ユニットの並びと、予約の一覧。1回だけ読んで、日ごとの在室は occupantsOn で拾う。 */
@@ -100,8 +101,8 @@ async function loadStays() {
     if (!name || !start || !end) continue;
     stays.push({
       name, start, end,
-      soutaiIn: cell(r, ph.indexOf('入所送迎')),
-      soutaiOut: cell(r, ph.indexOf('退所送迎')),
+      soutaiIn: parseSoutai(cell(r, ph.indexOf('入所送迎'))),
+      soutaiOut: parseSoutai(cell(r, ph.indexOf('退所送迎'))),
       inTime: cell(r, ph.indexOf('入所時間')),
       outTime: cell(r, ph.indexOf('退所時間')),
       key: `${cell(r, ph.indexOf('棟'))}-${Number(r[ph.indexOf('部屋')])}`,
@@ -210,15 +211,16 @@ function shiftTime(t: string, delta: number): string {
  * 午前／午後しか決まっていないときは「来所午前」のようにそのまま出す。
  *
  * ⚠️ 時刻の書き方（2026-10-30 現場の指定）
- *    ・家族送迎（FA）は予約の時刻そのままで、頭に FA を付ける
- *    ・それ以外は 来所＝予約の時刻＋15分／帰所＝予約の時刻−15分
+ *    ・送迎あり は 来所＝予約の時刻＋15分／帰所＝予約の時刻−15分
+ *    ・家族送迎（FA）・デイ送迎（DS）・他デイ送迎（他DS）は予約の時刻そのままで、頭に略号を付ける
+ *    ・送迎が未選択（以前「なし」で入れた古い予約）は、これまでどおり送迎ありと同じ扱い（±15分）
  */
 function visitLabel(day: string, o?: Stay): string {
   if (!o) return '';
   const parts: string[] = [];
-  const one = (label: string, time: string, soutai: string, delta: number) => {
+  const one = (label: string, time: string, soutai: SoutaiKind, delta: number) => {
     if (!time) return `${label}　　:`;
-    return soutai === '家族送迎' ? `${label}FA ${time}` : `${label}${shiftTime(time, delta)}`;
+    return SOUTAI_ABBR[soutai] ? `${label}${withAbbr(soutai, time)}` : `${label}${shiftTime(time, delta)}`;
   };
   if (day === o.start) parts.push(one('来所', o.inTime, o.soutaiIn, +15));
   if (day === o.end) parts.push(one('帰所', o.outTime, o.soutaiOut, -15));

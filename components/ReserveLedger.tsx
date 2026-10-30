@@ -14,8 +14,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import type { Person } from './ReserveApp';
 import { mealsFor, MEAL_KEYS, minutesOf, AM, PM, isAmPm, type MealKey } from '@/lib/meal-rule';
 import { classifyOverlap } from '@/lib/overlap';
-
-type SoutaiKind = '' | '送迎あり' | '家族送迎';
+import { SOUTAI_KINDS, SOUTAI_LABEL, SOUTAI_ABBR, withAbbr, type SoutaiKind } from '@/lib/soutai';
 
 interface Reservation {
   id: string;
@@ -33,23 +32,38 @@ interface Reservation {
   createdAt: string;
 }
 
-/** 家族送迎は時間の前に「FA」を付けて出す。送迎は入所・退所で別なので、その向きのほうを見る。 */
-const timeLabel = (s: SoutaiKind, t: string) => (s === '家族送迎' ? `FA ${t}` : t);
-/** 送迎の選択肢。送迎なしはあり得ないので二択。空（以前「なし」で入れたもの）のときだけ「未選択」が見える。 */
+/**
+ * 表に出す時刻。送迎あり以外は略号を前に付ける（FA／DS／他DS）。
+ * 送迎は入所・退所で別なので、その向きのほうを見る。
+ */
+const timeLabel = (s: SoutaiKind, t: string) => withAbbr(s, t);
+/**
+ * 送迎の選択肢。送迎なしはあり得ないので、送迎あり／家族送迎(FA)／デイ送迎(DS)／他デイ送迎(他DS) の4択
+ * （2026-10-30 現場の指定）。空（以前「なし」で入れたもの）のときだけ「未選択」が見える。
+ */
 function SoutaiOptions() {
   return (
     <>
       <option value="" disabled hidden>-- 未選択 --</option>
-      <option value="送迎あり">送迎あり</option>
-      <option value="家族送迎">家族送迎（FA）</option>
+      {SOUTAI_KINDS.map(k => <option key={k} value={k}>{SOUTAI_LABEL[k]}</option>)}
     </>
   );
 }
 
+/**
+ * 表のマスに出す時刻。略号（FA／DS／他DS）だけ少し小さくする。
+ * ⚠️ 「他DS 09:00」は12pxのままだと幅54pxのマスちょうどになり、端が欠けるため。
+ */
+function TimeText({ text }: { text: string }) {
+  const i = text.indexOf(' ');
+  if (i < 0) return <span className="rv-time">{text}</span>;
+  return <span className="rv-time"><span className="rv-abbr">{text.slice(0, i)}</span> {text.slice(i + 1)}</span>;
+}
+
 /** 一覧表で時刻のうしろに出す送迎の印。 */
 function SoutaiBadge({ s }: { s: SoutaiKind }) {
-  if (s === '家族送迎') return <span className="px-1 py-0.5 rounded bg-slate-200 text-slate-700 font-bold">FA</span>;
   if (s === '送迎あり') return <span className="px-1 py-0.5 rounded bg-sky-100 text-sky-800">送迎</span>;
+  if (SOUTAI_ABBR[s]) return <span className="px-1 py-0.5 rounded bg-slate-200 text-slate-700 font-bold">{SOUTAI_ABBR[s]}</span>;
   return null;
 }
 interface Room { building: string; room: number; disabled: boolean; staging: boolean; note: string; }
@@ -610,7 +624,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
     setForm({
       id: '', name: '', building, room, start: iso, end: iso,
       // 時刻の既定値。決まっていないことが多いので 入所＝午前・退所＝午後（2026-10-30 現場の指定）。
-      // 送迎は 送迎あり／家族送迎 の二択。多いほうの「送迎あり」を既定にする。
+      // 送迎は4択（lib/soutai.ts）。いちばん多い「送迎あり」を既定にする。
       status: '仮予約', inTime: AM, soutaiIn: '送迎あり', outTime: PM, soutaiOut: '送迎あり', note: '',
     });
     setConflicts(null); setMsg('');
@@ -631,7 +645,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
     if (!form) return;
     // 送迎なしはあり得ない。以前「なし」で入れた予約は、直すときに選んでもらう。
     if (!form.soutaiIn || !form.soutaiOut) {
-      setError(`${!form.soutaiIn ? '入所' : '退所'}の送迎を選んでください（送迎あり／家族送迎）`);
+      setError(`${!form.soutaiIn ? '入所' : '退所'}の送迎を選んでください`);
       return;
     }
     setError('');
@@ -1080,12 +1094,14 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
         /* 予約のマスはつまんで動かせる */
         .rv-grab { cursor: grab; }
         .rv-grab:active { cursor: grabbing; }
-        /* 入所時間（初日の名前の上）・退所時間（最終日の名前の下）。家族送迎は FA 付き。 */
+        /* 入所時間（初日の名前の上）・退所時間（最終日の名前の下）。送迎あり以外は FA／DS／他DS 付き。 */
         /* 時刻は8pxだと年配の職員に読みにくいので12pxにしてある（1.5倍・2026-09-22 現場の声）。
            マスは幅54px・高さ18pxなので、"FA 09:00" でもこの大きさまでなら収まる。 */
         .rv-time { font-size: 12px; line-height: 1; letter-spacing: -.04em; color: #475569; font-weight: 400; }
         /* 名前と同じマスに並べるときだけは、名前がつぶれないよう少し小さくする */
         .rv-both .rv-time { font-size: 10px; }
+        /* 送迎の略号（FA／DS／他DS）は時刻より少し小さく。数字のほうを読ませたいので。 */
+        .rv-time .rv-abbr { font-size: .8em; }
         /* 時刻はそれぞれの塊のほうへ寄せる。入所は右下（これから始まる塊は右下へ伸びる）、
            退所は左上（終わる塊は左上から来ている）。どちらの塊の時刻か迷わなくなる。
            ⚠️ マス側の字と行間も詰めること。行ボックスがマスいっぱいのままだと縦の寄せが効かない。 */
@@ -1423,8 +1439,6 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
               <span className="font-semibold block">入所の送迎</span>
               <select value={form.soutaiIn} required onChange={e => patch({ soutaiIn: e.target.value as SoutaiKind })}
                 className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-sm bg-white">
-                {/* 送迎なしはあり得ないので、送迎あり／家族送迎 の二択（2026-10-30 現場の指定）。
-                    以前「なし」で入れた予約だけ、空のままだと分かるように「未選択」を出す。 */}
                 <SoutaiOptions />
               </select>
             </label>
@@ -1436,8 +1450,6 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
               <span className="font-semibold block">退所の送迎</span>
               <select value={form.soutaiOut} required onChange={e => patch({ soutaiOut: e.target.value as SoutaiKind })}
                 className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-sm bg-white">
-                {/* 送迎なしはあり得ないので、送迎あり／家族送迎 の二択（2026-10-30 現場の指定）。
-                    以前「なし」で入れた予約だけ、空のままだと分かるように「未選択」を出す。 */}
                 <SoutaiOptions />
               </select>
             </label>
@@ -1450,13 +1462,16 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
           {(!form.soutaiIn || !form.soutaiOut) && (
             <p className="text-xs font-bold text-red-700">
               ⚠ {!form.soutaiIn && '入所'}{!form.soutaiIn && !form.soutaiOut && '・'}{!form.soutaiOut && '退所'}の送迎が未選択です。
-              送迎あり か 家族送迎 を選んでから保存してください。
+              選んでから保存してください。
             </p>
           )}
-          {(form.soutaiIn === '家族送迎' || form.soutaiOut === '家族送迎') && (
+          {(SOUTAI_ABBR[form.soutaiIn] || SOUTAI_ABBR[form.soutaiOut]) && (
             <div className="text-xs text-slate-600">
-              ※ 家族送迎は、表のその向きの時刻の前に <b>FA</b> と出ます
-              （{form.soutaiIn === '家族送迎' ? '入所' : ''}{form.soutaiIn === '家族送迎' && form.soutaiOut === '家族送迎' ? '・' : ''}{form.soutaiOut === '家族送迎' ? '退所' : ''}）。
+              ※ 表の時刻の前に
+              {SOUTAI_ABBR[form.soutaiIn] && <> 入所は <b>{SOUTAI_ABBR[form.soutaiIn]}</b></>}
+              {SOUTAI_ABBR[form.soutaiIn] && SOUTAI_ABBR[form.soutaiOut] && '、'}
+              {SOUTAI_ABBR[form.soutaiOut] && <> 退所は <b>{SOUTAI_ABBR[form.soutaiOut]}</b></>}
+              {' '}と出ます。
             </div>
           )}
 
@@ -1507,8 +1522,8 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
             </colgroup>
             <thead>
               <tr>
-                <th colSpan={2} style={{ left: 0 }} className="rv-fix bg-gray-50 px-1 py-1 text-gray-500 font-semibold sticky top-0">部屋</th>
-                <th style={{ left: OV_W.bld + OV_W.room }} className="rv-fix bg-gray-50 px-1 py-1 text-gray-500 font-semibold sticky top-0">食</th>
+                {/* すみれの上の日付行と同じく「日付」（2026-10-30 現場の指定。以前は「部屋」「食」） */}
+                <th colSpan={3} style={{ left: 0 }} className="rv-fix bg-gray-50 px-1 py-1 text-gray-500 font-semibold sticky top-0">日付</th>
                 {dates.map(d => {
                   const w = dowOf(year, month, d);
                   const isToday = isoOf(year, month, d) === today;
@@ -1691,7 +1706,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
                                     const nm = nameRv ? tightName(nameRv.name) : '';
 
                                     if (!nm) {
-                                      if (timeHere) return <span className="rv-time">{timeHere}</span>;
+                                      if (timeHere) return <TimeText text={timeHere} />;
                                       return shown ? '' : '・';
                                     }
                                     if (timeHere) {
@@ -1700,7 +1715,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
                                       return (
                                         <span className="rv-both">
                                           <span className="rv-name" style={{ fontSize: fs }}>{nm}</span>
-                                          <span className="rv-time">{timeHere}</span>
+                                          <TimeText text={timeHere} />
                                         </span>
                                       );
                                     }
@@ -1809,8 +1824,8 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
         <b>消した予約は「削除ログ」シートに残る</b>ので、あとから気づいたときも「🗑 削除履歴」からいつでも戻せます
         （消したときと同じ内容・同じ行で戻ります）。
         空きマスをクリックで追加、予約のマスをクリックで編集。期間を入れると、その期間を丸ごと押さえられる部屋が選択肢に「○」で出ます。
-        入所時間は初日の名前の上、退所時間は最終日の名前の下に出ます。<b>家族送迎</b>のときは時間の前に <b>FA</b> が付きます
-        （送迎は「送迎あり」か「家族送迎（FA）」の二択です）。
+        入所時間は初日の名前の上、退所時間は最終日の名前の下に出ます。送迎は4択で、送迎あり以外は時間の前に略号が付きます
+        （家族送迎＝<b>FA</b>、デイ送迎＝<b>DS</b>、他デイ送迎＝<b>他DS</b>）。
         ※ タッチ操作ではドラッグできないので、その場合は編集フォームで部屋と期間を直してください。
       </p>
     </div>

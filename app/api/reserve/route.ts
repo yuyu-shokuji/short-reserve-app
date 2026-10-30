@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getMonth, saveReservation, deleteReservation, findConflicts } from '@/lib/ledger';
+import { normSoutai } from '@/lib/soutai';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,8 +35,8 @@ export async function POST(req: NextRequest) {
       id: p.id, name: p.name, building: p.building, room: Number(p.room),
       start: p.start, end: p.end, status: p.status === '確定' ? '確定' : '仮予約',
       inTime: p.inTime, outTime: p.outTime, note: p.note, restore: !!p.restore,
-      soutaiIn: p.soutaiIn === '家族送迎' ? '家族送迎' : p.soutaiIn === '送迎あり' ? '送迎あり' : '',
-      soutaiOut: p.soutaiOut === '家族送迎' ? '家族送迎' : p.soutaiOut === '送迎あり' ? '送迎あり' : '',
+      soutaiIn: normSoutai(p.soutaiIn),
+      soutaiOut: normSoutai(p.soutaiOut),
     });
     return NextResponse.json({ ok: true, id });
   } catch (e: any) {
