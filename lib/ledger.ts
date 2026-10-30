@@ -13,6 +13,7 @@ import {
   SHEET, type CellWrite, type CellClear,
 } from './sheets';
 import { classifyOverlap, isBlocking, type Span } from './overlap';
+import { parseMeds, formatMeds, type MedKey } from './meds';
 
 // 送迎は入所時と退所時で違うことがあるので別々に持つ（2026-09-22に1つから分けた）
 const COLS = ['ID', '氏名', '棟', '部屋', '開始日', '終了日', '状態',
@@ -62,7 +63,10 @@ export interface Room {
  * ⚠️ 試験運用のあいだだけの仕組み。食事管理アプリと統合するときは、向こうの利用者と
  *    ダブった人を消す（added が入っている人が候補）。
  */
-export interface Person { name: string; furi: string; contact: string; note: string; added?: string; }
+export interface Person {
+  name: string; furi: string; contact: string; note: string; added?: string;
+  meds?: MedKey[];   // 服薬管理（lib/meds.ts）
+}
 
 // ── 日付ヘルパー（すべて YYYY-MM-DD のローカル日付として扱う） ───────────
 
@@ -193,65 +197,108 @@ async function loadAll(): Promise<{ grid: Grid; reservations: Reservation[]; roo
     }))
     .filter(r => r.building && r.room);
 
-  const peopleRows = s[SHEET.people] ?? [];
-  const pc = indexColumns(peopleRows, PEOPLE_COLS).col;
-  const people: Person[] = peopleRows.slice(1)
+  const people = parsePeople(s[SHEET.people] ?? []);
+
+  return { grid, reservations, rooms, people };
+}
+
+// ── 利用者の追加・編集（試験運用中だけ） ─────────────────────────────────
+
+// ⚠️ 並びを変えないこと。見出しに無い列は、この順で右端に足される（登録日時 → 服薬管理）。
+const PEOPLE_COLS = ['氏名', 'ふりがな', '連絡先', '備考', '登録日時', '服薬管理'] as const;
+
+function parsePeople(rows: any[][]): Person[] {
+  const pc = indexColumns(rows, PEOPLE_COLS).col;
+  return rows.slice(1)
     .map(r => ({
       name: cell(r, pc['氏名']),
       furi: cell(r, pc['ふりがな']),
       contact: cell(r, pc['連絡先']),
       note: cell(r, pc['備考']),
       added: cell(r, pc['登録日時']) || undefined,
+      meds: parseMeds(cell(r, pc['服薬管理'])),
     }))
     .filter(p => p.name);
-
-  return { grid, reservations, rooms, people };
 }
-
-// ── 利用者の追加（試験運用中だけ） ─────────────────────────────────────
-
-const PEOPLE_COLS = ['氏名', 'ふりがな', '連絡先', '備考', '登録日時'] as const;
 
 /** 氏名・ふりがなの空白をそろえる。前後を落とし、姓と名の間は全角1つ（シートの既存データに合わせる）。 */
 const normSpace = (s: string) => String(s ?? '').trim().replace(/[\s　]+/g, '　');
 /** 同じ人かどうかの比べ方。空白の有無・全角半角の違いは無視する。 */
-const nameKey = (s: string) => String(s ?? '').replace(/[\s　]+/g, '');
+export const nameKey = (s: string) => String(s ?? '').replace(/[\s　]+/g, '');
+
+/** 利用者シートを読み、見出しに無い列（登録日時・服薬管理など）があれば右端に見出しを足す。 */
+async function loadPeopleSheet() {
+  const s = await readSheets([SHEET.people]);
+  const rows = s[SHEET.people] ?? [];
+  const g = indexColumns(rows, PEOPLE_COLS);
+  const head = rows[0] ?? [];
+  const headWrites: CellWrite[] = PEOPLE_COLS
+    .filter(k => String(head[g.col[k]] ?? '').trim() !== k)
+    .map(k => ({ sheet: SHEET.people, row: 0, col: g.col[k], value: k }));
+  if (headWrites.length) await batchWrite(headWrites);
+  return { rows, col: g.col };
+}
 
 /**
  * 利用者シートに1人足す。同じ氏名（空白違いも含む）がいれば足さずにエラー。
  * 足した日時を「登録日時」列に入れて、あとで食事管理アプリと統合するときに見分けられるようにする。
  */
-export async function addPerson(p: { name: string; furi: string; contact?: string; note?: string }): Promise<Person> {
+export async function addPerson(p: {
+  name: string; furi: string; contact?: string; note?: string; meds?: string[];
+}): Promise<Person> {
   const name = normSpace(p.name);
   const furi = normSpace(p.furi);
   if (!name) throw new Error('氏名を入れてください');
   if (!furi) throw new Error('ふりがなを入れてください');
 
   const s = await readSheets([SHEET.people]);
-  const rows = s[SHEET.people] ?? [];
-  const g = indexColumns(rows, PEOPLE_COLS);
-  const dup = rows.slice(1).find(r => nameKey(cell(r, g.col['氏名'])) === nameKey(name));
-  if (dup) throw new Error(`「${cell(dup, g.col['氏名'])}」さんはもう登録されています`);
+  const rows0 = s[SHEET.people] ?? [];
+  const c0 = indexColumns(rows0, PEOPLE_COLS).col;
+  const dup = rows0.slice(1).find(r => nameKey(cell(r, c0['氏名'])) === nameKey(name));
+  if (dup) throw new Error(`「${cell(dup, c0['氏名'])}」さんはもう登録されています`);
 
-  // 見出しに無い列（登録日時など）は、右端に見出しを足してから書く
-  const head = rows[0] ?? [];
-  const headWrites: CellWrite[] = PEOPLE_COLS
-    .filter(k => String(head[g.col[k]] ?? '').trim() !== k)
-    .map(k => ({ sheet: SHEET.people, row: 0, col: g.col[k], value: k }));
-  if (headWrites.length) await batchWrite(headWrites);
-
+  const { col } = await loadPeopleSheet();
   const person: Person = {
     name, furi, contact: String(p.contact ?? '').trim(), note: String(p.note ?? '').trim(), added: nowStamp(),
+    meds: parseMeds(formatMeds(p.meds ?? [])),
   };
-  const width = Math.max(...PEOPLE_COLS.map(k => g.col[k])) + 1;
+  const width = Math.max(...PEOPLE_COLS.map(k => col[k])) + 1;
   const row: any[] = Array(width).fill('');
-  row[g.col['氏名']] = person.name;
-  row[g.col['ふりがな']] = person.furi;
-  row[g.col['連絡先']] = person.contact;
-  row[g.col['備考']] = person.note;
-  row[g.col['登録日時']] = person.added;
+  row[col['氏名']] = person.name;
+  row[col['ふりがな']] = person.furi;
+  row[col['連絡先']] = person.contact;
+  row[col['備考']] = person.note;
+  row[col['登録日時']] = person.added;
+  row[col['服薬管理']] = formatMeds(person.meds ?? []);
   await appendRow(SHEET.people, row);
   return person;
+}
+
+/**
+ * 利用者の ふりがな・連絡先・備考・服薬管理 を直す。
+ * ⚠️ 氏名は予約とのつながりの鍵なので、ここでは変えない（変えるとその人の予約と切れる）。
+ */
+export async function updatePerson(name: string, p: {
+  furi: string; contact?: string; note?: string; meds?: string[];
+}): Promise<Person> {
+  const furi = normSpace(p.furi);
+  if (!furi) throw new Error('ふりがなを入れてください');
+  const { rows, col } = await loadPeopleSheet();
+  const i = rows.findIndex((r, k) => k > 0 && nameKey(cell(r, col['氏名'])) === nameKey(name));
+  if (i < 1) throw new Error(`「${name}」さんが利用者シートに見つかりません`);
+
+  const meds = parseMeds(formatMeds(p.meds ?? []));
+  const v = {
+    ふりがな: furi, 連絡先: String(p.contact ?? '').trim(), 備考: String(p.note ?? '').trim(),
+    服薬管理: formatMeds(meds),
+  };
+  await batchWrite((Object.keys(v) as (keyof typeof v)[]).map(k => ({
+    sheet: SHEET.people, row: i, col: col[k], value: v[k],
+  })));
+  return {
+    name: cell(rows[i], col['氏名']), furi: v.ふりがな, contact: v.連絡先, note: v.備考,
+    added: cell(rows[i], col['登録日時']) || undefined, meds,
+  };
 }
 
 /** 部屋・利用者（画面の選択肢に使う）。 */

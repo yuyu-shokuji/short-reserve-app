@@ -15,6 +15,7 @@ import ExcelJS from 'exceljs';
 import { readSheets, SHEET } from './sheets';
 import rec1 from './record-templates/rec1.json';
 import rec2 from './record-templates/rec2.json';
+import { MED_INTERNAL, MED_EYE, MED_COL, parseMeds, type MedKey } from './meds';
 
 const WD = ['日', '月', '火', '水', '木', '金', '土'];
 const pad2 = (n: number) => String(n).padStart(2, '0');
@@ -40,6 +41,7 @@ const FORMS = {
     roomBreak: false,                                  // ①は棟名と番号の間に全角空きがある
     roomRows: [5, 8, 11, 14, 17, 20, 23, 26, 29, 32],
     colRoom: 2, colName: 3, colVisit: 33,              // B / C / AG
+    meds: true,                                        // 服薬管理欄（Z〜AF）がある
   },
   '2': {
     tpl: rec2 as unknown as Template,
@@ -55,6 +57,7 @@ const FORMS = {
     roomBreak: true,
     roomRows: [5, 9, 13, 17, 21, 25, 29, 33, 37, 41],
     colRoom: 2, colName: 3, colVisit: 0,               // ②に来所帰所の欄は無い
+    meds: false,
   },
 } as const;
 
@@ -73,7 +76,7 @@ interface Stay {
 
 /** ユニットの並びと、予約の一覧。1回だけ読んで、日ごとの在室は occupantsOn で拾う。 */
 async function loadStays() {
-  const data = await readSheets([SHEET.reserve, SHEET.rooms]);
+  const data = await readSheets([SHEET.reserve, SHEET.rooms, SHEET.people]);
   const cell = (r: any[], i: number) => String(r?.[i] ?? '').trim();
   const head = (rows: any[][]) => (rows[0] ?? []).map((c: any) => String(c ?? '').trim());
 
@@ -103,7 +106,61 @@ async function loadStays() {
       key: `${cell(r, ph.indexOf('棟'))}-${Number(r[ph.indexOf('部屋')])}`,
     });
   }
-  return { units, stays };
+
+  // 服薬管理（利用者シート）。氏名の空白の違いは無視して引けるようにしておく。
+  const peopleRows = data[SHEET.people] ?? [];
+  const uh = head(peopleRows);
+  const meds = new Map<string, MedKey[]>();
+  for (const r of peopleRows.slice(1)) {
+    const m = parseMeds(cell(r, uh.indexOf('服薬管理')));
+    if (m.length) meds.set(nameKey(cell(r, uh.indexOf('氏名'))), m);
+  }
+  return { units, stays, meds };
+}
+
+const nameKey = (s: string) => String(s ?? '').replace(/[\s　]+/g, '');
+
+const MARK = '〇';
+// 〇はマスいっぱいの大きさで（現場の指定）。マスは 幅 約42px × 高さ 30.75pt。
+const MARK_FONT = { name: 'ＭＳ Ｐゴシック', size: 26 };
+const black = (style: 'thin' | 'medium') => ({ style, color: { argb: 'FF000000' } }) as const;
+
+/**
+ * 記録表①の服薬管理欄に〇を付ける。tr はひな形での部屋の1行目（見出し「朝食前…眠前」の行）。
+ *   2行目 … 内服。チェックした所（朝食前〜眠前）に〇
+ *   3行目 … 点眼があるときだけ。Z に「点眼」、同じ行の 朝食後／昼食後／夕食後／眠前 の列に〇
+ * ⚠️ ひな形の3行目は V（またはW）〜AF が1つにつながったセル。点眼のときだけ Z〜AF を切り離し、
+ *    左の残り（〜Y）はつなぎ直す。
+ */
+function putMeds(ws: ExcelJS.Worksheet, t: Template, off: number, tr: number, meds: MedKey[]) {
+  for (const k of MED_INTERNAL) {
+    if (!meds.includes(k)) continue;
+    const c = ws.getCell(off + tr + 1, MED_COL[k]);
+    c.value = MARK;
+    c.font = MARK_FONT;
+    c.alignment = { horizontal: 'center', vertical: 'middle' };
+  }
+  const eye = MED_EYE.filter(k => meds.includes(k));
+  if (!eye.length) return;
+  const r = off + tr + 2;
+  const band = t.merges.find(m => m[0] === tr + 2 && m[2] === tr + 2 && m[1] <= 26 && m[3] >= 32);
+  if (band) {
+    ws.unMergeCells(r, band[1], r, band[3]);
+    if (band[1] < 25) ws.mergeCells(r, band[1], r, 25);
+  }
+  for (let c = 26; c <= 32; c++) {
+    const cl = ws.getCell(r, c);
+    cl.value = null;
+    cl.font = { name: 'ＭＳ Ｐゴシック', size: 10 };
+    cl.alignment = { horizontal: 'center', vertical: 'middle' };
+    cl.border = { top: black('medium'), bottom: black('medium'), left: black('thin'), right: black(c === 32 ? 'medium' : 'thin') };
+  }
+  ws.getCell(r, 26).value = '点眼';
+  for (const k of eye) {
+    const cl = ws.getCell(r, MED_COL[k]);
+    cl.value = MARK;
+    cl.font = MARK_FONT;
+  }
 }
 
 /** その日、どの部屋に誰がいるか。「棟-部屋番号」→ 予約。 */
@@ -161,7 +218,7 @@ export async function buildRecordSheet(day: string, form: FormKey): Promise<Reco
   const [y, m, d] = day.split('-').map(Number);
   const day2 = nextDay(day);
   const [, m2, d2] = day2.split('-').map(Number);
-  const { units, stays } = await loadStays();
+  const { units, stays, meds } = await loadStays();
   // 1ページ＝1ユニット×1日。ユニットの中で日付を並べる（表＝1日目、裏＝2日目）。
   const pages = units.flatMap(unit => [day, day2].map(pd => ({ unit, day: pd })));
 
@@ -232,6 +289,13 @@ export async function buildRecordSheet(day: string, form: FormKey): Promise<Reco
       const o = by.get(`${unit}-${no}`);
       ws.getCell(r, f.colName).value = o ? o.name : null;
       if (o) filled++;
+      if (f.meds) {
+        // ひな形の3行目に見本の書き込み（「点眼：朝(　　)」）が残っているので消しておく
+        const band = t.merges.find(m => m[0] === tr + 2 && m[2] === tr + 2 && m[3] >= 32);
+        if (band) ws.getCell(off + tr + 2, band[1]).value = null;
+        const m = o ? meds.get(nameKey(o.name)) : undefined;
+        if (m) putMeds(ws, t, off, tr, m);
+      }
       if (f.colVisit) {
         const vc = ws.getCell(r, f.colVisit);
         vc.value = visitLabel(pd, o) || null;

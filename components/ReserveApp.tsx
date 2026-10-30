@@ -5,9 +5,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import ReserveLedger, { LedgerSummary, NameMode } from './ReserveLedger';
 import PeopleTab from './PeopleTab';
+import type { MedKey } from '@/lib/meds';
 
 /** 利用者。added は「利用者」タブで足した日時（試験運用中だけ。統合時にダブりを消す目印）。 */
-export interface Person { name: string; furi: string; contact: string; note: string; added?: string; }
+export interface Person {
+  name: string; furi: string; contact: string; note: string; added?: string;
+  meds?: MedKey[];   // 服薬管理（記録表①に〇で出す）
+}
 
 type Tab = 'ledger' | 'people';
 
@@ -132,7 +136,8 @@ export default function ReserveApp() {
               nameMode={nameMode} reloadKey={reloadKey} onSummary={setSummary} />
           </div>
           {tab === 'people' && (
-            <PeopleTab people={people} onAdded={p => setPeople(ps => [...ps, p])} />
+            <PeopleTab people={people} onSaved={(p, isNew) =>
+              setPeople(ps => (isNew ? [...ps, p] : ps.map(x => (x.name === p.name ? p : x))))} />
           )}
         </>
       )}
