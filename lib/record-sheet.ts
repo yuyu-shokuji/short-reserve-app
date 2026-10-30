@@ -66,7 +66,10 @@ function tplStyle(t: Template, r: number, c: number) {
   return cl?.s !== undefined ? t.styles[cl.s] : {};
 }
 
-interface Stay { name: string; start: string; end: string; inTime: string; outTime: string; key: string }
+interface Stay {
+  name: string; start: string; end: string; inTime: string; outTime: string; key: string;
+  soutaiIn: string; soutaiOut: string;   // 入所送迎／退所送迎（「家族送迎」なら FA）
+}
 
 /** ユニットの並びと、予約の一覧。1回だけ読んで、日ごとの在室は occupantsOn で拾う。 */
 async function loadStays() {
@@ -93,6 +96,8 @@ async function loadStays() {
     if (!name || !start || !end) continue;
     stays.push({
       name, start, end,
+      soutaiIn: cell(r, ph.indexOf('入所送迎')),
+      soutaiOut: cell(r, ph.indexOf('退所送迎')),
       inTime: cell(r, ph.indexOf('入所時間')),
       outTime: cell(r, ph.indexOf('退所時間')),
       key: `${cell(r, ph.indexOf('棟'))}-${Number(r[ph.indexOf('部屋')])}`,
@@ -116,14 +121,33 @@ function nextDay(day: string): string {
 }
 
 /**
+ * 時刻を分だけずらす（"HH:MM" のときだけ。午前／午後や空はそのまま返す）。
+ * その日の 0:00〜23:59 からはみ出さないようにする。
+ */
+function shiftTime(t: string, delta: number): string {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(t ?? '').trim());
+  if (!m) return t;
+  const v = Math.min(23 * 60 + 59, Math.max(0, Number(m[1]) * 60 + Number(m[2]) + delta));
+  return `${pad2(Math.floor(v / 60))}:${pad2(v % 60)}`;
+}
+
+/**
  * 来所・帰所の欄。入所日なら来所、退所日なら帰所。時刻が無ければ枠だけ。
  * 午前／午後しか決まっていないときは「来所午前」のようにそのまま出す。
+ *
+ * ⚠️ 時刻の書き方（2026-10-30 現場の指定）
+ *    ・家族送迎（FA）は予約の時刻そのままで、頭に FA を付ける
+ *    ・それ以外は 来所＝予約の時刻＋15分／帰所＝予約の時刻−15分
  */
-function visitLabel(day: string, o?: { start: string; end: string; inTime: string; outTime: string }): string {
+function visitLabel(day: string, o?: Stay): string {
   if (!o) return '';
   const parts: string[] = [];
-  if (day === o.start) parts.push(`来所${o.inTime || '　　:'}`);
-  if (day === o.end) parts.push(`帰所${o.outTime || '　　:'}`);
+  const one = (label: string, time: string, soutai: string, delta: number) => {
+    if (!time) return `${label}　　:`;
+    return soutai === '家族送迎' ? `${label}FA ${time}` : `${label}${shiftTime(time, delta)}`;
+  };
+  if (day === o.start) parts.push(one('来所', o.inTime, o.soutaiIn, +15));
+  if (day === o.end) parts.push(one('帰所', o.outTime, o.soutaiOut, -15));
   return parts.join(' ');
 }
 
@@ -208,7 +232,12 @@ export async function buildRecordSheet(day: string, form: FormKey): Promise<Reco
       const o = by.get(`${unit}-${no}`);
       ws.getCell(r, f.colName).value = o ? o.name : null;
       if (o) filled++;
-      if (f.colVisit) ws.getCell(r, f.colVisit).value = visitLabel(pd, o) || null;
+      if (f.colVisit) {
+        const vc = ws.getCell(r, f.colVisit);
+        vc.value = visitLabel(pd, o) || null;
+        // ひな形は中央寄せと左寄せが混ざっていたので、すべて中央にそろえる（現場の指定）
+        vc.alignment = { ...(vc.alignment ?? {}), horizontal: 'center', vertical: 'middle', wrapText: true };
+      }
     });
 
     // 1ページずつ改ページ。両面印刷で、同じユニットの1日目と2日目が表裏になる。
