@@ -57,7 +57,12 @@ export interface Room {
   staging: boolean;
   note: string;
 }
-export interface Person { name: string; furi: string; contact: string; note: string; }
+/**
+ * 利用者。added はこのアプリの「利用者」タブで足した日時（シートの「登録日時」列）。
+ * ⚠️ 試験運用のあいだだけの仕組み。食事管理アプリと統合するときは、向こうの利用者と
+ *    ダブった人を消す（added が入っている人が候補）。
+ */
+export interface Person { name: string; furi: string; contact: string; note: string; added?: string; }
 
 // ── 日付ヘルパー（すべて YYYY-MM-DD のローカル日付として扱う） ───────────
 
@@ -189,17 +194,64 @@ async function loadAll(): Promise<{ grid: Grid; reservations: Reservation[]; roo
     .filter(r => r.building && r.room);
 
   const peopleRows = s[SHEET.people] ?? [];
-  const pc = indexColumns(peopleRows, ['氏名', 'ふりがな', '連絡先', '備考']).col;
+  const pc = indexColumns(peopleRows, PEOPLE_COLS).col;
   const people: Person[] = peopleRows.slice(1)
     .map(r => ({
       name: cell(r, pc['氏名']),
       furi: cell(r, pc['ふりがな']),
       contact: cell(r, pc['連絡先']),
       note: cell(r, pc['備考']),
+      added: cell(r, pc['登録日時']) || undefined,
     }))
     .filter(p => p.name);
 
   return { grid, reservations, rooms, people };
+}
+
+// ── 利用者の追加（試験運用中だけ） ─────────────────────────────────────
+
+const PEOPLE_COLS = ['氏名', 'ふりがな', '連絡先', '備考', '登録日時'] as const;
+
+/** 氏名・ふりがなの空白をそろえる。前後を落とし、姓と名の間は全角1つ（シートの既存データに合わせる）。 */
+const normSpace = (s: string) => String(s ?? '').trim().replace(/[\s　]+/g, '　');
+/** 同じ人かどうかの比べ方。空白の有無・全角半角の違いは無視する。 */
+const nameKey = (s: string) => String(s ?? '').replace(/[\s　]+/g, '');
+
+/**
+ * 利用者シートに1人足す。同じ氏名（空白違いも含む）がいれば足さずにエラー。
+ * 足した日時を「登録日時」列に入れて、あとで食事管理アプリと統合するときに見分けられるようにする。
+ */
+export async function addPerson(p: { name: string; furi: string; contact?: string; note?: string }): Promise<Person> {
+  const name = normSpace(p.name);
+  const furi = normSpace(p.furi);
+  if (!name) throw new Error('氏名を入れてください');
+  if (!furi) throw new Error('ふりがなを入れてください');
+
+  const s = await readSheets([SHEET.people]);
+  const rows = s[SHEET.people] ?? [];
+  const g = indexColumns(rows, PEOPLE_COLS);
+  const dup = rows.slice(1).find(r => nameKey(cell(r, g.col['氏名'])) === nameKey(name));
+  if (dup) throw new Error(`「${cell(dup, g.col['氏名'])}」さんはもう登録されています`);
+
+  // 見出しに無い列（登録日時など）は、右端に見出しを足してから書く
+  const head = rows[0] ?? [];
+  const headWrites: CellWrite[] = PEOPLE_COLS
+    .filter(k => String(head[g.col[k]] ?? '').trim() !== k)
+    .map(k => ({ sheet: SHEET.people, row: 0, col: g.col[k], value: k }));
+  if (headWrites.length) await batchWrite(headWrites);
+
+  const person: Person = {
+    name, furi, contact: String(p.contact ?? '').trim(), note: String(p.note ?? '').trim(), added: nowStamp(),
+  };
+  const width = Math.max(...PEOPLE_COLS.map(k => g.col[k])) + 1;
+  const row: any[] = Array(width).fill('');
+  row[g.col['氏名']] = person.name;
+  row[g.col['ふりがな']] = person.furi;
+  row[g.col['連絡先']] = person.contact;
+  row[g.col['備考']] = person.note;
+  row[g.col['登録日時']] = person.added;
+  await appendRow(SHEET.people, row);
+  return person;
 }
 
 /** 部屋・利用者（画面の選択肢に使う）。 */

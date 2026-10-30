@@ -4,8 +4,12 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import ReserveLedger, { LedgerSummary, NameMode } from './ReserveLedger';
+import PeopleTab from './PeopleTab';
 
-export interface Person { name: string; furi: string; contact: string; note: string; }
+/** 利用者。added は「利用者」タブで足した日時（試験運用中だけ。統合時にダブりを消す目印）。 */
+export interface Person { name: string; furi: string; contact: string; note: string; added?: string; }
+
+type Tab = 'ledger' | 'people';
 
 export default function ReserveApp() {
   const now = new Date();
@@ -17,6 +21,8 @@ export default function ReserveApp() {
   const [summary, setSummary] = useState<LedgerSummary | null>(null);
   // 「更新」を押すたびに増やす。チャート側はこれが変わったら読み直す。
   const [reloadKey, setReloadKey] = useState(0);
+  // 画面の切り替え。予約台帳は隠すだけにして、開いている入力パネルや表示位置を残す。
+  const [tab, setTab] = useState<Tab>('ledger');
 
   /**
    * チャートの表示方式。食事毎（滞在する日すべてに氏名）と 予約毎（1件に1回だけ）。
@@ -60,6 +66,17 @@ export default function ReserveApp() {
             <span className="text-lg">🛏</span>
             <h1 className="text-base font-bold text-gray-800">ショート予約台帳</h1>
           </div>
+          {/* タブ。利用者タブは試験運用中に新しい利用者を足すための仮の入口。 */}
+          <span className="inline-flex items-center rounded-lg bg-gray-100 p-0.5 text-sm">
+            {([['ledger', '📅 予約台帳'], ['people', '👤 利用者']] as const).map(([v, label]) => (
+              <button key={v} onClick={() => setTab(v)}
+                className={`px-3 py-1 rounded-md font-semibold ${
+                  tab === v ? 'bg-white shadow text-gray-800' : 'text-gray-500 hover:text-gray-700'}`}>
+                {label}
+              </button>
+            ))}
+          </span>
+          {tab === 'ledger' && (<>
           <div className="flex items-center gap-1">
             <button onClick={() => shiftMonth(-1)} aria-label="前の月"
               className="px-2.5 py-1 rounded-lg bg-gray-100 text-gray-700 font-bold hover:bg-gray-200">◀</button>
@@ -100,6 +117,7 @@ export default function ReserveApp() {
           {/* 読み直し。押すと reloadKey が増えて、チャート側が読み直す。 */}
           <button onClick={() => setReloadKey(k => k + 1)}
             className="bg-gray-200 text-gray-700 rounded-lg px-2.5 py-1 text-sm font-semibold hover:bg-gray-300">🔄 更新</button>
+          </>)}
         </div>
       </div>
 
@@ -108,8 +126,15 @@ export default function ReserveApp() {
           ⚠ {setupError}
         </div>
       ) : (
-        <ReserveLedger year={year} month={month} people={people}
-          nameMode={nameMode} reloadKey={reloadKey} onSummary={setSummary} />
+        <>
+          <div className={tab === 'ledger' ? '' : 'hidden'}>
+            <ReserveLedger year={year} month={month} people={people}
+              nameMode={nameMode} reloadKey={reloadKey} onSummary={setSummary} />
+          </div>
+          {tab === 'people' && (
+            <PeopleTab people={people} onAdded={p => setPeople(ps => [...ps, p])} />
+          )}
+        </>
       )}
     </div>
   );
