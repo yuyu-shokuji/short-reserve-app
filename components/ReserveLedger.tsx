@@ -35,6 +35,17 @@ interface Reservation {
 
 /** 家族送迎は時間の前に「FA」を付けて出す。送迎は入所・退所で別なので、その向きのほうを見る。 */
 const timeLabel = (s: SoutaiKind, t: string) => (s === '家族送迎' ? `FA ${t}` : t);
+/** 送迎の選択肢。送迎なしはあり得ないので二択。空（以前「なし」で入れたもの）のときだけ「未選択」が見える。 */
+function SoutaiOptions() {
+  return (
+    <>
+      <option value="" disabled hidden>-- 未選択 --</option>
+      <option value="送迎あり">送迎あり</option>
+      <option value="家族送迎">家族送迎（FA）</option>
+    </>
+  );
+}
+
 /** 一覧表で時刻のうしろに出す送迎の印。 */
 function SoutaiBadge({ s }: { s: SoutaiKind }) {
   if (s === '家族送迎') return <span className="px-1 py-0.5 rounded bg-slate-200 text-slate-700 font-bold">FA</span>;
@@ -148,8 +159,13 @@ function TimeSelect({ value, onChange }: { value: string; onChange: (v: string) 
         }}>
         <option value="">--</option>
         <option value={AM}>{AM}</option>
-        <option value={PM}>{PM}</option>
-        {HOUR_OPTS.map(o => <option key={o} value={o}>{o}</option>)}
+        {/* 午後は 12 と 13 の間に置く（現場の指定。午後の時刻の並びの頭にあると探しやすい） */}
+        {HOUR_OPTS.map(o => (
+          <Fragment key={o}>
+            {o === '13' && <option value={PM}>{PM}</option>}
+            <option value={o}>{o}</option>
+          </Fragment>
+        ))}
       </select>
       <span className="text-gray-400">:</span>
       <select value={mi} disabled={!h} className={`${sel} ${h ? '' : 'opacity-40'}`}
@@ -594,7 +610,8 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
     setForm({
       id: '', name: '', building, room, start: iso, end: iso,
       // 時刻の既定値。決まっていないことが多いので 入所＝午前・退所＝午後（2026-10-30 現場の指定）。
-      status: '仮予約', inTime: AM, soutaiIn: '', outTime: PM, soutaiOut: '', note: '',
+      // 送迎は 送迎あり／家族送迎 の二択。多いほうの「送迎あり」を既定にする。
+      status: '仮予約', inTime: AM, soutaiIn: '送迎あり', outTime: PM, soutaiOut: '送迎あり', note: '',
     });
     setConflicts(null); setMsg('');
   };
@@ -612,6 +629,12 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
 
   const doSave = async (force = false) => {
     if (!form) return;
+    // 送迎なしはあり得ない。以前「なし」で入れた予約は、直すときに選んでもらう。
+    if (!form.soutaiIn || !form.soutaiOut) {
+      setError(`${!form.soutaiIn ? '入所' : '退所'}の送迎を選んでください（送迎あり／家族送迎）`);
+      return;
+    }
+    setError('');
     setBusy(true); setMsg('');
     try {
       const res = await fetch('/api/reserve', {
@@ -1387,7 +1410,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
             </label>
           </div>
 
-          {/* 入退所の時間と送迎区分は別もの。送迎なしでも時間は入れられる。
+          {/* 入退所の時間と送迎区分は別もの。
               パネルの幅に合わせて 入所（時間・送迎）／退所（時間・送迎）／備考 の3段に積む。 */}
           <div className="grid grid-cols-2 gap-x-3 gap-y-3 items-end">
             {/* 時刻は「時」「分」のプルダウン。分は5分刻み。 */}
@@ -1398,11 +1421,11 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
             {/* 送迎は入所と退所で違うことがあるので別々に選ぶ */}
             <label className="text-xs text-gray-600 space-y-1">
               <span className="font-semibold block">入所の送迎</span>
-              <select value={form.soutaiIn} onChange={e => patch({ soutaiIn: e.target.value as SoutaiKind })}
+              <select value={form.soutaiIn} required onChange={e => patch({ soutaiIn: e.target.value as SoutaiKind })}
                 className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-sm bg-white">
-                <option value="">なし</option>
-                <option value="送迎あり">送迎あり</option>
-                <option value="家族送迎">家族送迎（FA）</option>
+                {/* 送迎なしはあり得ないので、送迎あり／家族送迎 の二択（2026-10-30 現場の指定）。
+                    以前「なし」で入れた予約だけ、空のままだと分かるように「未選択」を出す。 */}
+                <SoutaiOptions />
               </select>
             </label>
             <div className="text-xs text-gray-600 space-y-1">
@@ -1411,11 +1434,11 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
             </div>
             <label className="text-xs text-gray-600 space-y-1">
               <span className="font-semibold block">退所の送迎</span>
-              <select value={form.soutaiOut} onChange={e => patch({ soutaiOut: e.target.value as SoutaiKind })}
+              <select value={form.soutaiOut} required onChange={e => patch({ soutaiOut: e.target.value as SoutaiKind })}
                 className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-sm bg-white">
-                <option value="">なし</option>
-                <option value="送迎あり">送迎あり</option>
-                <option value="家族送迎">家族送迎（FA）</option>
+                {/* 送迎なしはあり得ないので、送迎あり／家族送迎 の二択（2026-10-30 現場の指定）。
+                    以前「なし」で入れた予約だけ、空のままだと分かるように「未選択」を出す。 */}
+                <SoutaiOptions />
               </select>
             </label>
             <label className="text-xs text-gray-600 space-y-1 col-span-2">
@@ -1424,6 +1447,12 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
                 className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-sm" placeholder="連絡事項など" />
             </label>
           </div>
+          {(!form.soutaiIn || !form.soutaiOut) && (
+            <p className="text-xs font-bold text-red-700">
+              ⚠ {!form.soutaiIn && '入所'}{!form.soutaiIn && !form.soutaiOut && '・'}{!form.soutaiOut && '退所'}の送迎が未選択です。
+              送迎あり か 家族送迎 を選んでから保存してください。
+            </p>
+          )}
           {(form.soutaiIn === '家族送迎' || form.soutaiOut === '家族送迎') && (
             <div className="text-xs text-slate-600">
               ※ 家族送迎は、表のその向きの時刻の前に <b>FA</b> と出ます
@@ -1776,7 +1805,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
         （消したときと同じ内容・同じ行で戻ります）。
         空きマスをクリックで追加、予約のマスをクリックで編集。期間を入れると、その期間を丸ごと押さえられる部屋が選択肢に「○」で出ます。
         入所時間は初日の名前の上、退所時間は最終日の名前の下に出ます。<b>家族送迎</b>のときは時間の前に <b>FA</b> が付きます
-        （時間の入力は送迎の有無とは別で、送迎なしでも入れられます）。
+        （送迎は「送迎あり」か「家族送迎（FA）」の二択です）。
         ※ タッチ操作ではドラッグできないので、その場合は編集フォームで部屋と期間を直してください。
       </p>
     </div>
