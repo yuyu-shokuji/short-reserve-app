@@ -3,12 +3,12 @@
 // ★このファイルだけ直せばルールを変えられるようにしてある（今後変わる前提のため）。
 // 画面（チャート）も食数の見せ方もここの判定を使う。
 //
-// 現場のルール（2026-09-22 時点）
+// 現場のルール（2026-09-22 時点。退所日の夕食は 2026-10-30 に 18:30 へ変更）
 //   入所日 … 朝食は出さない（何時に来ても）
 //            13:00 以降 → 夕のみ ／ それより前 → 昼・夕
 //   退所日 … 11:30 まで          → 朝のみ
-//            11:30 超 17:30 まで → 朝・昼
-//            17:30 超            → 朝・昼・夕
+//            11:30 超 18:29 まで → 朝・昼
+//            18:30 以降          → 朝・昼・夕
 //   中日   … 朝・昼・夕
 //   おやつ … 昼と連動（昼が出る日は出る）
 //
@@ -35,12 +35,12 @@ export function minutesOf(t: string): number | null {
 
 const HH = (h: number, m = 0) => h * 60 + m;
 
-/** 退所日に出す食事。17:30以前なら夕は不要、11:30以前なら昼も不要。 */
+/** 退所日に出す食事。18:30より前なら夕は不要、11:30以前なら昼も不要。 */
 export function mealsOnCheckout(outTime: string): Meals {
   const t = minutesOf(outTime);
   if (t === null) return { asa: true, hiru: true, yu: false };   // 時刻未入力＝夕は出さない
   if (t <= HH(11, 30)) return { asa: true, hiru: false, yu: false };
-  if (t <= HH(17, 30)) return { asa: true, hiru: true, yu: false };
+  if (t < HH(18, 30)) return { asa: true, hiru: true, yu: false };
   return { ...ALL };
 }
 
