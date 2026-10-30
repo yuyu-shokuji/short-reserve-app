@@ -27,3 +27,9 @@ export const MED_COL: Record<MedKey, number> = {
   朝食前: 26, 朝食後: 27, 昼食前: 28, 昼食後: 29, 夕食前: 30, 夕食後: 31, 眠前: 32,   // Z〜AF
   点眼朝: 27, 点眼昼: 29, 点眼夕: 31, 点眼眠: 32,
 };
+
+/** どの食事（眠前は「その晩泊まるか」）に付くか。入退所日に〇を付けるかの判定に使う。 */
+export const MED_WHEN: Record<MedKey, 'asa' | 'hiru' | 'yu' | 'night'> = {
+  朝食前: 'asa', 朝食後: 'asa', 昼食前: 'hiru', 昼食後: 'hiru', 夕食前: 'yu', 夕食後: 'yu', 眠前: 'night',
+  点眼朝: 'asa', 点眼昼: 'hiru', 点眼夕: 'yu', 点眼眠: 'night',
+};

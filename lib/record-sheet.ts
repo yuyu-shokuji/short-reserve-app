@@ -15,7 +15,8 @@ import ExcelJS from 'exceljs';
 import { readSheets, SHEET } from './sheets';
 import rec1 from './record-templates/rec1.json';
 import rec2 from './record-templates/rec2.json';
-import { MED_INTERNAL, MED_EYE, MED_COL, parseMeds, type MedKey } from './meds';
+import { MED_INTERNAL, MED_EYE, MED_COL, MED_WHEN, parseMeds, type MedKey } from './meds';
+import { mealsFor } from './meal-rule';
 
 const WD = ['日', '月', '火', '水', '木', '金', '土'];
 const pad2 = (n: number) => String(n).padStart(2, '0');
@@ -121,8 +122,24 @@ async function loadStays() {
 const nameKey = (s: string) => String(s ?? '').replace(/[\s　]+/g, '');
 
 const MARK = '〇';
-// 〇はマスいっぱいの大きさで（現場の指定）。マスは 幅 約42px × 高さ 30.75pt。
-const MARK_FONT = { name: 'ＭＳ Ｐゴシック', size: 26 };
+// 〇は大きめ・薄いグレー（現場の指定。26pt → 24pt・グレーに変更 2026-10-30）。マスは 幅 約42px × 高さ 30.75pt。
+const MARK_FONT = { name: 'ＭＳ Ｐゴシック', size: 24, color: { argb: 'FFBFBFBF' } };
+
+/**
+ * その日に〇を付ける服薬だけに絞る（2026-10-30 現場の指定）。
+ *   中日 … 全部付ける（食事を出しても出さなくても）
+ *   入所日・退所日 … その日に出さない食事のぶんは付けない（lib/meal-rule.ts の判定）。
+ *   眠前・点眼眠は、その晩泊まる日（退所日以外）だけ。
+ */
+function medsOnDay(meds: MedKey[], o: Stay, day: string): MedKey[] {
+  if (day !== o.start && day !== o.end) return meds;
+  const eat = mealsFor(o, day);
+  const night = day < o.end;
+  return meds.filter(k => {
+    const w = MED_WHEN[k];
+    return w === 'night' ? night : eat[w];
+  });
+}
 const black = (style: 'thin' | 'medium') => ({ style, color: { argb: 'FF000000' } }) as const;
 
 /**
@@ -294,7 +311,8 @@ export async function buildRecordSheet(day: string, form: FormKey): Promise<Reco
         const band = t.merges.find(m => m[0] === tr + 2 && m[2] === tr + 2 && m[3] >= 32);
         if (band) ws.getCell(off + tr + 2, band[1]).value = null;
         const m = o ? meds.get(nameKey(o.name)) : undefined;
-        if (m) putMeds(ws, t, off, tr, m);
+        const today = m && o ? medsOnDay(m, o, pd) : [];
+        if (today.length) putMeds(ws, t, off, tr, today);
       }
       if (f.colVisit) {
         const vc = ws.getCell(r, f.colVisit);
