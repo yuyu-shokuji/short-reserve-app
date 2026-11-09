@@ -46,7 +46,7 @@ interface Row {
 }
 
 /** その週にかかる予約を、表に出す順に並べて返す。 */
-async function weekRows(weekStart: string, weekEnd: string): Promise<Row[]> {
+async function weekRows(weekStart: string, weekEnd: string): Promise<{ rows: Row[]; units: string[] }> {
   const data = await readSheets([SHEET.reserve, SHEET.rooms]);
   const cell = (r: any[], i: number) => String(r?.[i] ?? '').trim();
   const head = (rows: any[][]) => (rows[0] ?? []).map((c: any) => String(c ?? '').trim());
@@ -97,10 +97,12 @@ async function weekRows(weekStart: string, weekEnd: string): Promise<Row[]> {
     }
   }
 
-  return [...byPerson.values()].sort((a, b) =>
+  const rows = [...byPerson.values()].sort((a, b) =>
     (buildingOrder.get(a.building) ?? 99) - (buildingOrder.get(b.building) ?? 99)
     || a.order - b.order
     || a.spans[0].start.localeCompare(b.spans[0].start));
+  // ユニットの並び（部屋シートの順）。その週に誰もいないユニットも、追記用の空き枠を出すので返す。
+  return { rows, units: [...buildingOrder.keys()] };
 }
 
 export interface BathSheet { buffer: Buffer; filename: string; weekStart: string; count: number; }
@@ -113,7 +115,7 @@ export async function buildBathSheet(day: string): Promise<BathSheet> {
     const x = new Date(y, m - 1, d); x.setDate(x.getDate() + i); return x;
   });
   const weekEnd = isoOf(days[6]);
-  const rows = await weekRows(weekStart, weekEnd);
+  const { rows, units } = await weekRows(weekStart, weekEnd);
 
   const wb = new ExcelJS.Workbook();
   wb.creator = 'グラン悠遊 ショート予約台帳';
@@ -180,36 +182,30 @@ export async function buildBathSheet(day: string): Promise<BathSheet> {
   let r = FIRST;
   const bodyRows: number[] = [];          // 罫線を引く行（空行は除く）
   const spacerRows: number[] = [];        // ユニットの区切りの空行
-  let prevBuilding = '';
+  /** 印刷したあとに手で書き足すための空き枠の数（ユニットごと。2026-11-09 現場の指定）。 */
+  const BLANK_ROWS = 3;
 
-  for (const rv of rows) {
-    // ユニットが変わったら1行あける（現場の指定。さくらとすみれの境が分かるように）
-    if (prevBuilding && rv.building !== prevBuilding) {
-      ws.getRow(r).height = 7;
-      spacerRows.push(r);
-      r++;
-    }
-    prevBuilding = rv.building;
-
+  /** 1行ぶん。rv が無ければ空き枠（ユニット名だけ入れて、氏名・塗り・期間は空）。 */
+  const putRow = (building: string, rv?: Row) => {
     ws.getRow(r).height = 19;
     bodyRows.push(r);
 
     // ⚠️ 部屋番号は出さない。ユニット名だけ（現場の指定）。
     const unit = ws.getCell(r, 2);
-    unit.value = rv.building;
+    unit.value = building;
     unit.font = { name: FONT, size: 10 };
     unit.alignment = { horizontal: 'center', vertical: 'middle' };
     unit.fill = solid(GRAY.head);
 
     const nm = ws.getCell(r, 3);
-    nm.value = `${rv.name}　様`;
+    nm.value = rv ? `${rv.name}　様` : null;
     nm.font = { name: FONT, size: 11 };
     // 長い名前でも枠からはみ出さないように、入りきらないときは文字を縮める（shrinkToFit）
     nm.alignment = { horizontal: 'left', vertical: 'middle', indent: 1, shrinkToFit: true };
 
     for (let i = 0; i < 7; i++) {
       const day = isoOf(days[i]);
-      const staying = rv.spans.some(s => day >= s.start && day <= s.end);
+      const staying = !!rv && rv.spans.some(s => day >= s.start && day <= s.end);
       for (const kind of ['bath', 'wash'] as const) {
         const c = ws.getCell(r, colOf(i, kind));
         c.font = { name: FONT, size: 12 };
@@ -221,7 +217,7 @@ export async function buildBathSheet(day: string): Promise<BathSheet> {
     // 期間＝滞在予定の最終日。⚠️ 土曜まで残る人だけに入れる（現場の指定）。
     // 週の途中で帰る人は、塗りが途切れるところで分かるので書かない。
     const ed = ws.getCell(r, LAST);
-    if (rv.end >= weekEnd) {
+    if (rv && rv.end >= weekEnd) {
       const [ey, em, edd] = rv.end.split('-').map(Number);
       // ⚠️ exceljs は Date を UTC として書くので、地元時間の Date を渡すと1日前になる。
       ed.value = new Date(Date.UTC(ey, em - 1, edd));
@@ -231,7 +227,19 @@ export async function buildBathSheet(day: string): Promise<BathSheet> {
     ed.alignment = { horizontal: 'center', vertical: 'middle' };
     ed.fill = solid(GRAY.head);
     r++;
-  }
+  };
+
+  units.forEach((building, ui) => {
+    // ユニットが変わったら1行あける（現場の指定。さくらとすみれの境が分かるように）
+    if (ui > 0) {
+      ws.getRow(r).height = 7;
+      spacerRows.push(r);
+      r++;
+    }
+    for (const rv of rows.filter(x => x.building === building)) putRow(building, rv);
+    // 利用者の下に空き枠。その週に誰もいないユニットにも出す。
+    for (let k = 0; k < BLANK_ROWS; k++) putRow(building);
+  });
 
   // 入浴者数（現場の要望）。記号は手入力なので、数えるのは式にまかせる。
   // ☆＝機械浴、それ以外の印（◎○△）＝個浴。

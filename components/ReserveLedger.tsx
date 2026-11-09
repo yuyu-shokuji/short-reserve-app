@@ -272,6 +272,7 @@ export interface LedgerSummary {
   confirmed: number; tentative: number;
   pct: number | null; used: number; total: number;
   rooms: number; days: number;
+  users: number;   // 当月利用者数（同じ人は1名・キャンセル待ちは除く）
 }
 
 interface Props {
@@ -1009,8 +1010,9 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
       total: occupancy?.total ?? 0,
       rooms: realRooms.length,
       days: daysInMonth,
+      users: userCount,
     });
-  }, [onSummary, loading, rows, occupancy, realRooms.length, daysInMonth]);
+  }, [onSummary, loading, rows, occupancy, realRooms.length, daysInMonth, userCount]);
 
   const printChart = printWhat === 'chart';
   const printBody = PRINT_H - 44;   // 見出し1行ぶんを空けておく
@@ -1166,7 +1168,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
           </>
         ) : (
           <span className="text-base font-bold">
-            グラン悠遊　ショート予約一覧　{year}年{month}月（{rows.length}件・あいうえお順）
+            ネオライフサポート　ショートステイ　予約一覧　{year}年{month}月（{rows.length}件・あいうえお順）
             <span className="ml-3 text-[10px] font-normal text-gray-600">印刷 {today}</span>
           </span>
         )}

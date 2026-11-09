@@ -104,6 +104,11 @@ export default function ReserveApp() {
                   <span className="ml-1 font-normal text-xs text-gray-400">（{summary.used}/{summary.total} 室日）</span>
                 </span>
               )}
+              {/* 当月利用者数。同じ人が月に何回使っても1名（印刷の見出しと同じ数え方）。 */}
+              <span className="text-sm font-bold text-emerald-700 tabular-nums"
+                title="この月に予約が入っている人の数。同じ人が何回使っても1名。確定・仮予約とも数え、キャンセル待ちは数えません。">
+                当月利用者数 {summary.users}名
+              </span>
             </div>
           )}
           {/* 表示方式。食事毎＝滞在する日すべてに氏名、予約毎＝1件に1回だけまとめて出す。 */}
