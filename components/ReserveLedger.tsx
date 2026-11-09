@@ -601,6 +601,16 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
     return { used, total, pct: Math.round((used / total) * 100) };
   }, [realRooms, daysInMonth, vacantPerDay]);
 
+  /**
+   * 当月利用者数（2026-11-09 現場の指定）。その月にかかる予約の氏名の数。
+   * 同じ人が月に何回使っても1名（例：11/2〜5 と 11/20〜25 の人も1名）。氏名の空白の違いは無視する。
+   * 確定・仮予約は両方数え、キャンセル待ち（シート上の仮置き）はまだ利用していないので数えない。
+   */
+  const userCount = useMemo(() => {
+    const waiting = new Set(rooms.filter(r => r.staging).map(r => r.building));
+    return new Set(rows.filter(r => !waiting.has(r.building)).map(r => r.name.replace(/[\s　]+/g, ''))).size;
+  }, [rows, rooms]);
+
   // ── 期間を入れたら空き部屋を調べる（問い合わせ中にすぐ答えるため） ──
   useEffect(() => {
     if (!form?.start || !form?.end || form.end < form.start) { setVacancy(null); return; }
@@ -1146,12 +1156,12 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
           <>
             <span className="text-base font-bold">
               {/* 紙の見出しは法人名で（2026-11-09 現場の指定。以前は「グラン悠遊　ショート予約台帳」） */}
-              ネオライフサポート　ショートステイ予約台帳　{year}年{month}月
+              ネオライフサポート　ショートステイ　予約台帳　{year}年{month}月
             </span>
             <span className="ml-4 text-[10px] font-normal text-gray-600">
               <span className="rv-lg rv-lg-occ" /> 確定 {rows.filter(r => r.status === '確定').length}件
               　<span className="rv-lg rv-lg-kari" /> 仮予約 {rows.filter(r => r.status === '仮予約').length}件
-              {occupancy && `　稼働率 ${occupancy.pct}%`}　印刷 {today}
+              {occupancy && `　稼働率 ${occupancy.pct}%`}　当月利用者数 {userCount}名　印刷 {today}
             </span>
           </>
         ) : (
