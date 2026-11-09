@@ -991,9 +991,12 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
       a.remove();
       URL.revokeObjectURL(url);
       const [ry, rm, rd] = recDay.split('-').map(Number);
-      const nx = new Date(ry, rm - 1, rd + 3);
-      setMsg(`記録表${form === '1' ? '①' : '②'}（${rm}/${rd}〜${nx.getMonth() + 1}/${nx.getDate()} の4日ぶん）を作りました。`
-        + 'ユニットごとに2日ずつ表裏になる順です（両面印刷）。');
+      // 月はまたがない（月末で打ち切る）。サーバー側（lib/record-sheet.ts）と同じ数え方。
+      const endD = Math.min(rd + 3, new Date(ry, rm, 0).getDate());
+      const n = endD - rd + 1;
+      setMsg(`記録表${form === '1' ? '①' : '②'}（${rm}/${rd}${n > 1 ? `〜${rm}/${endD}` : ''} の${n}日ぶん）を作りました。`
+        + 'ユニットごとに2日ずつ表裏になる順です（両面印刷）'
+        + (n % 2 ? '。日数が奇数なので、ユニットの最後の紙の裏は白紙です。' : '。'));
     } catch (e: any) {
       setError(e.message || '記録表の作成に失敗しました');
     } finally { setBusy(false); }
@@ -1201,7 +1204,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
         {/* 記録表①②。選んだ日から4日ぶんを Excel で落とす（2026-11-09 に2日→4日）。
             ユニットごとに使うので、さくら1〜4日目・すみれ1〜4日目 の順（両面で2日ずつ表裏）。 */}
         <span className="inline-flex items-center gap-1 rounded-lg bg-violet-50 border border-violet-200 px-2 py-1"
-          title="選んだ日から4日ぶんの記録表を Excel で作ります。両面印刷すると、ユニットごとに1日目と2日目、3日目と4日目が表裏になります。各部屋の利用者名と来所・帰所が入ります。">
+          title="選んだ日から4日ぶんの記録表を Excel で作ります（月はまたがず、月末で止まります）。両面印刷すると、ユニットごとに1日目と2日目、3日目と4日目が表裏になります。各部屋の利用者名と来所・帰所が入ります。">
           <span className="text-xs font-semibold text-violet-800">📋 記録表</span>
           <input type="date" value={recDay} onChange={e => setRecDay(e.target.value)}
             className="border border-violet-300 rounded px-1 py-1 text-xs bg-white" />

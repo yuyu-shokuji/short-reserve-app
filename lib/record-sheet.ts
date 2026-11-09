@@ -4,7 +4,9 @@
 //    （2026-10-30 現場の指定。以前は表＝さくら・裏＝すみれ の同じ日だった）。
 //    選んだ日から DAYS 日ぶん（2026-11-09 に2日→4日）を、さくら1〜4日目 → すみれ1〜4日目 の順に
 //    1ページずつ積む。両面印刷すると、さくら2枚（1・2日目／3・4日目）・すみれ2枚 に分かれる。
-//    ⚠️ 日数は偶数にしておくこと。奇数だと次のユニットの1日目が前のユニットの紙の裏に来てしまう。
+//    ⚠️ 月はまたがない（2026-11-09 現場の指定）。月末で打ち切る（例：1/29 → 29・30・31 の3日）。
+//       日数が奇数になったときは、ユニットの最後に白紙ページを1枚はさむ。はさまないと、
+//       次のユニットの1日目が前のユニットの紙の裏に来てしまう。
 //
 // 様式は罫線・結合・フォントが細かいので、現場の見本から取り出したひな形
 // （lib/record-templates/rec1.json・rec2.json）をそのまま敷き直している。
@@ -189,7 +191,7 @@ function occupantsOn(stays: Stay[], day: string) {
   return by;
 }
 
-/** 1回で作る日数（選んだ日から）。偶数にすること（上の説明）。 */
+/** 1回で作る日数（選んだ日から。月末で打ち切る）。偶数にすること（上の説明）。 */
 const DAYS = 4;
 
 /** n日後（YYYY-MM-DD）。 */
@@ -239,12 +241,18 @@ export async function buildRecordSheet(day: string, form: FormKey): Promise<Reco
   const f = FORMS[form];
   const t = f.tpl;
   const [y, m, d] = day.split('-').map(Number);
-  const dayList = Array.from({ length: DAYS }, (_, i) => addDays(day, i));
+  // 月はまたがない。選んだ日の月のうちだけ（月末で打ち切る）。
+  const dayList = Array.from({ length: DAYS }, (_, i) => addDays(day, i)).filter(x => x.slice(0, 7) === day.slice(0, 7));
   const lastDay = dayList[dayList.length - 1];
-  const [, m2, d2] = lastDay.split('-').map(Number);
+  const d2 = Number(lastDay.slice(8));
   const { units, stays, meds } = await loadStays();
   // 1ページ＝1ユニット×1日。ユニットの中で日付を並べる（表＝1日目、裏＝2日目、次の紙の表＝3日目…）。
-  const pages = units.flatMap(unit => dayList.map(pd => ({ unit, day: pd })));
+  // 日数が奇数なら、ユニットの最後に白紙（day: null）を足して、次のユニットが新しい紙の表から始まるようにする。
+  // 最後のユニットのあとは足さない（裏が空くだけなので）。
+  const pages: { unit: string; day: string | null }[] = units.flatMap((unit, ui) => [
+    ...dayList.map(pd => ({ unit, day: pd as string | null })),
+    ...(dayList.length % 2 && ui < units.length - 1 ? [{ unit, day: null }] : []),
+  ]);
 
   // ⚠️ 印刷は見本のまま（等倍）。「ページに合わせる」を付けると縮んで行が低くなり、
   //    1ページずつきれいに分かれなくなる。
@@ -263,7 +271,7 @@ export async function buildRecordSheet(day: string, form: FormKey): Promise<Reco
 
   const wb = new ExcelJS.Workbook();
   wb.creator = 'グラン悠遊 ショート予約台帳';
-  const ws = wb.addWorksheet(`${m}月${d}日〜${m2}月${d2}日`, { pageSetup });
+  const ws = wb.addWorksheet(lastDay === day ? `${m}月${d}日` : `${m}月${d}日〜${d2}日`, { pageSetup });
 
   if (t.defaultRowHeight) ws.properties.defaultRowHeight = t.defaultRowHeight;
   for (const [c, w] of Object.entries(t.colWidths)) ws.getColumn(Number(c)).width = w;
@@ -271,6 +279,14 @@ export async function buildRecordSheet(day: string, form: FormKey): Promise<Reco
   let filled = 0;
   pages.forEach(({ unit, day: pd }, pi) => {
     const off = pi * t.rows;                       // 1ページずつ下へ積む
+    if (pd === null) {
+      // 白紙ページ。行の高さだけそろえて改ページ位置を保つ。
+      // ⚠️ Excel は何も入っていないページを印刷で飛ばすので、見えない空白を1つだけ置いて白紙を1枚出させる。
+      for (const [r, h] of Object.entries(t.rowHeights)) ws.getRow(off + Number(r)).height = h;
+      ws.getCell(off + 1, 2).value = ' ';
+      if (pi < pages.length - 1) ws.getRow(off + t.rows).addPageBreak();
+      return;
+    }
     const [py, pm, pdd] = pd.split('-').map(Number);
     const dow = WD[new Date(py, pm - 1, pdd).getDay()];
     const by = occupantsOn(stays, pd);
@@ -334,10 +350,11 @@ export async function buildRecordSheet(day: string, form: FormKey): Promise<Reco
   });
 
   const buf = await wb.xlsx.writeBuffer();
-  const tail = m2 === m ? pad2(d2) : `${pad2(m2)}-${pad2(d2)}`;
+  // 月はまたがないので、終わりの日だけ付ける（1日だけのときは付けない）
+  const tail = lastDay === day ? '' : `〜${pad2(d2)}`;
   return {
     buffer: Buffer.from(buf as ArrayBuffer),
-    filename: `${f.label}_${y}-${pad2(m)}-${pad2(d)}〜${tail}.xlsx`,
+    filename: `${f.label}_${y}-${pad2(m)}-${pad2(d)}${tail}.xlsx`,
     day, filled,
   };
 }
