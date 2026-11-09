@@ -2,8 +2,9 @@
 //
 // ⚠️ 記録表はユニットごとに使うので、1枚の表裏が「同じユニットの連続した2日」になるように並べる
 //    （2026-10-30 現場の指定。以前は表＝さくら・裏＝すみれ の同じ日だった）。
-//    選んだ日と翌日の2日ぶんを、さくら1日目 → さくら2日目 → すみれ1日目 → すみれ2日目 の順に
-//    1ページずつ積む。両面印刷すると、さくら1枚・すみれ1枚 に分かれる。
+//    選んだ日から DAYS 日ぶん（2026-11-09 に2日→4日）を、さくら1〜4日目 → すみれ1〜4日目 の順に
+//    1ページずつ積む。両面印刷すると、さくら2枚（1・2日目／3・4日目）・すみれ2枚 に分かれる。
+//    ⚠️ 日数は偶数にしておくこと。奇数だと次のユニットの1日目が前のユニットの紙の裏に来てしまう。
 //
 // 様式は罫線・結合・フォントが細かいので、現場の見本から取り出したひな形
 // （lib/record-templates/rec1.json・rec2.json）をそのまま敷き直している。
@@ -188,10 +189,13 @@ function occupantsOn(stays: Stay[], day: string) {
   return by;
 }
 
-/** 翌日（YYYY-MM-DD）。 */
-function nextDay(day: string): string {
+/** 1回で作る日数（選んだ日から）。偶数にすること（上の説明）。 */
+const DAYS = 4;
+
+/** n日後（YYYY-MM-DD）。 */
+function addDays(day: string, n: number): string {
   const [y, m, d] = day.split('-').map(Number);
-  const x = new Date(y, m - 1, d + 1);
+  const x = new Date(y, m - 1, d + n);
   return `${x.getFullYear()}-${pad2(x.getMonth() + 1)}-${pad2(x.getDate())}`;
 }
 
@@ -229,17 +233,18 @@ function visitLabel(day: string, o?: Stay): string {
 
 export interface RecordSheet { buffer: Buffer; filename: string; day: string; filled: number; }
 
-/** 日付を渡すと、その日と翌日の記録表（①か②）を、ユニットごとに表裏になる順で組み立てて返す。 */
+/** 日付を渡すと、その日から DAYS 日ぶんの記録表（①か②）を、ユニットごとに表裏になる順で組み立てて返す。 */
 export async function buildRecordSheet(day: string, form: FormKey): Promise<RecordSheet> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error('日付は YYYY-MM-DD で渡してください');
   const f = FORMS[form];
   const t = f.tpl;
   const [y, m, d] = day.split('-').map(Number);
-  const day2 = nextDay(day);
-  const [, m2, d2] = day2.split('-').map(Number);
+  const dayList = Array.from({ length: DAYS }, (_, i) => addDays(day, i));
+  const lastDay = dayList[dayList.length - 1];
+  const [, m2, d2] = lastDay.split('-').map(Number);
   const { units, stays, meds } = await loadStays();
-  // 1ページ＝1ユニット×1日。ユニットの中で日付を並べる（表＝1日目、裏＝2日目）。
-  const pages = units.flatMap(unit => [day, day2].map(pd => ({ unit, day: pd })));
+  // 1ページ＝1ユニット×1日。ユニットの中で日付を並べる（表＝1日目、裏＝2日目、次の紙の表＝3日目…）。
+  const pages = units.flatMap(unit => dayList.map(pd => ({ unit, day: pd })));
 
   // ⚠️ 印刷は見本のまま（等倍）。「ページに合わせる」を付けると縮んで行が低くなり、
   //    1ページずつきれいに分かれなくなる。
@@ -258,7 +263,7 @@ export async function buildRecordSheet(day: string, form: FormKey): Promise<Reco
 
   const wb = new ExcelJS.Workbook();
   wb.creator = 'グラン悠遊 ショート予約台帳';
-  const ws = wb.addWorksheet(`${m}月${d}日・${m2}月${d2}日`, { pageSetup });
+  const ws = wb.addWorksheet(`${m}月${d}日〜${m2}月${d2}日`, { pageSetup });
 
   if (t.defaultRowHeight) ws.properties.defaultRowHeight = t.defaultRowHeight;
   for (const [c, w] of Object.entries(t.colWidths)) ws.getColumn(Number(c)).width = w;
@@ -324,7 +329,7 @@ export async function buildRecordSheet(day: string, form: FormKey): Promise<Reco
       }
     });
 
-    // 1ページずつ改ページ。両面印刷で、同じユニットの1日目と2日目が表裏になる。
+    // 1ページずつ改ページ。両面印刷で、同じユニットの1日目と2日目、3日目と4日目が表裏になる。
     if (pi < pages.length - 1) ws.getRow(off + t.rows).addPageBreak();
   });
 

@@ -982,7 +982,7 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      // ファイル名は中身に合わせて「選んだ日〜翌日」（サーバーが付けた名前を使う）
+      // ファイル名は中身に合わせて「選んだ日〜4日目」（サーバーが付けた名前を使う）
       const cd = res.headers.get('Content-Disposition') ?? '';
       const fm = /filename\*=UTF-8''([^;]+)/.exec(cd);
       a.download = fm ? decodeURIComponent(fm[1]) : `記録表${form === '1' ? '①' : '②'}_${recDay}.xlsx`;
@@ -991,9 +991,9 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
       a.remove();
       URL.revokeObjectURL(url);
       const [ry, rm, rd] = recDay.split('-').map(Number);
-      const nx = new Date(ry, rm - 1, rd + 1);
-      setMsg(`記録表${form === '1' ? '①' : '②'}（${rm}/${rd}・${nx.getMonth() + 1}/${nx.getDate()}）を作りました。`
-        + 'ユニットごとに2日が表裏になる順です（両面印刷）。');
+      const nx = new Date(ry, rm - 1, rd + 3);
+      setMsg(`記録表${form === '1' ? '①' : '②'}（${rm}/${rd}〜${nx.getMonth() + 1}/${nx.getDate()} の4日ぶん）を作りました。`
+        + 'ユニットごとに2日ずつ表裏になる順です（両面印刷）。');
     } catch (e: any) {
       setError(e.message || '記録表の作成に失敗しました');
     } finally { setBusy(false); }
@@ -1198,10 +1198,10 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
             Excelを作る
           </button>
         </span>
-        {/* 記録表①②。選んだ日と翌日の2日ぶんを Excel で落とす。
-            ユニットごとに使うので、さくら1日目・さくら2日目・すみれ1日目・すみれ2日目 の順（両面で表裏）。 */}
+        {/* 記録表①②。選んだ日から4日ぶんを Excel で落とす（2026-11-09 に2日→4日）。
+            ユニットごとに使うので、さくら1〜4日目・すみれ1〜4日目 の順（両面で2日ずつ表裏）。 */}
         <span className="inline-flex items-center gap-1 rounded-lg bg-violet-50 border border-violet-200 px-2 py-1"
-          title="選んだ日と翌日の記録表を Excel で作ります。両面印刷すると、ユニットごとに1日目が表・2日目が裏になります。各部屋の利用者名と来所・帰所が入ります。">
+          title="選んだ日から4日ぶんの記録表を Excel で作ります。両面印刷すると、ユニットごとに1日目と2日目、3日目と4日目が表裏になります。各部屋の利用者名と来所・帰所が入ります。">
           <span className="text-xs font-semibold text-violet-800">📋 記録表</span>
           <input type="date" value={recDay} onChange={e => setRecDay(e.target.value)}
             className="border border-violet-300 rounded px-1 py-1 text-xs bg-white" />
