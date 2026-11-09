@@ -1145,7 +1145,8 @@ export default function ReserveLedger({ year, month, people, nameMode, reloadKey
         {printChart ? (
           <>
             <span className="text-base font-bold">
-              グラン悠遊　ショート予約台帳　{year}年{month}月
+              {/* 紙の見出しは法人名で（2026-11-09 現場の指定。以前は「グラン悠遊　ショート予約台帳」） */}
+              ネオライフサポート　ショートステイ予約台帳　{year}年{month}月
             </span>
             <span className="ml-4 text-[10px] font-normal text-gray-600">
               <span className="rv-lg rv-lg-occ" /> 確定 {rows.filter(r => r.status === '確定').length}件
